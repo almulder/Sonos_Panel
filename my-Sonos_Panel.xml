@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Sonos_Panel</Name>
+  <Repository>ghcr.io/almulder/sonos_panel:latest</Repository>
+  <Registry>https://github.com/almulder/Sonos_Panel/pkgs/container/sonos-panel</Registry>
+  <Network>br0</Network>
+  <MyIP></MyIP>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/almulder/Sonos_Panel/issues</Support>
+  <Project>https://github.com/almulder/Sonos_Panel</Project>
+  <Overview>Sonos touchscreen panel - a Node/Express app that controls Sonos speakers via a browser-based touch UI.&#13;
+&#13;
+This container requires a fixed IP address on a custom Docker network (br0) for Sonos SSDP discovery to work correctly. Standard bridge or host networking will not reliably discover speakers.&#13;
+&#13;
+Change Docker custom network type to ipvlan (highly recommended for Sonos)&#13;
+&#13;
+Setup instructions:&#13;
+1. In Unraid, go to Settings -&gt; Docker -&gt; Network Types, and make sure br0 is set to ipvlan mode.&#13;
+2. When adding this container, set Network Type to br0.&#13;
+3. Set the Fixed IP Address field to a free IP on your LAN (must not conflict with your router's DHCP range or any other device).&#13;
+4. Apply, then access the panel at http://&lt;the-ip-you-chose&gt;/ - no port number needed.</Overview>
+  <Category>HomeAutomation:</Category>
+  <WebUI>http://[IP]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/public/icons/icon-512.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="AppData Config Path" Target="/app/data" Default="/mnt/user/appdata/Sonos_Panel" Mode="rw" Description="Persistent config storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/Sonos_Panel</Config>
+  <Config Name="Application Port" Target="PORT" Default="80" Mode="" Description="Internal port the app listens on. Leave at 80 to match the WebUI link, which assumes no port number is needed." Type="Variable" Display="advanced-hide" Required="true" Mask="false">80</Config>
+  <Config Name="Color" Target="THEME_COLOR" Default="#e8a33d" Mode="" Description="Accent color (hex code). Used for buttons/highlights throughout the app, and the idle screensaver's color-cycle animation is generated from it automatically." Type="Variable" Display="always" Required="true" Mask="false">#e8a33d</Config>
+  <Config Name="DATA_DIR" Target="DATA_DIR" Default="/app/data" Mode="" Description="Data directory inside container" Type="Variable" Display="advanced-hide" Required="false" Mask="false">/app/data</Config>
+</Container>
