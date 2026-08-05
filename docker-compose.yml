@@ -1,0 +1,19 @@
+services:
+  sonos-panel:
+    build: .
+    # image: ghcr.io/almulder/sonos-panel:latest   # use this instead of `build: .` once published
+
+    container_name: sonos-panel
+    restart: unless-stopped
+
+    # REQUIRED, not optional: Sonos discovery uses SSDP (UDP multicast)
+    # to find speakers on the local network. Docker's default bridge
+    # network isolates the container from the host's network segment,
+    # which silently breaks discovery entirely -- the app will start
+    # fine and just never find any speakers, with no obvious error.
+    # Host networking shares the host's network stack directly, which
+    # is what SSDP multicast actually needs.
+    network_mode: host
+
+    environment:
+      - PORT=3000
