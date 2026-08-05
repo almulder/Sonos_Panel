@@ -877,11 +877,16 @@ button {
   100% { opacity: 0; transform: scale(1.15); }
 }
 
-/* Six curated stops spanning a warm-to-cool range (deep red through
-   rust and mustard, then teal through cyan-blue and navy) rather than a
-   full hue sweep -- each color holds briefly before smoothly
-   transitioning to the next, so it reads as "drifting between a
-   thoughtful set of tones" rather than a rainbow cycle. */
+/* Six stops spanning a warm-to-cool range rather than a full hue sweep --
+   each color holds briefly before smoothly transitioning to the next, so
+   it reads as "drifting between a thoughtful set of tones" rather than a
+   rainbow cycle.
+
+   NOTE: these hardcoded values are only the fallback shown before
+   JavaScript runs. public/js/theme.js overwrites this @keyframes rule at
+   runtime with six stops derived from THEME_COLOR (see the server's
+   /api/theme endpoint) -- edit theme.js's applyScreensaverCycle(), not
+   these values, to change the actual behavior users see. */
 @keyframes screensaver-colorcycle {
   0%, 14% { stroke: #9c3a2a; }
   17%, 31% { stroke: #c4622f; }

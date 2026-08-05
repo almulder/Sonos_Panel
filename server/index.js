@@ -11,6 +11,10 @@ const sonos = require('./sonos');
 const debugLog = require('./debugLog');
 
 const PORT = process.env.PORT || 3000;
+// User-selectable accent color (hex). Drives the UI accent (buttons,
+// highlights, borders) and the idle screensaver's color-cycle animation --
+// see public/js/theme.js for how it's applied client-side.
+const THEME_COLOR = process.env.THEME_COLOR || '#e8a33d';
 const POLL_INTERVAL_MS = 2000;
 const SONOS_FAST_POLL_INTERVAL_MS = 500;
 
@@ -62,6 +66,12 @@ process.on('unhandledRejection', (reason) => {
 });
 process.on('uncaughtException', (err) => {
   debugLog.error('server', `Uncaught exception: ${err.message}`);
+});
+
+// ---------------- Theme ----------------
+
+app.get('/api/theme', (req, res) => {
+  res.json({ color: THEME_COLOR });
 });
 
 // ---------------- Sonos routes ----------------
