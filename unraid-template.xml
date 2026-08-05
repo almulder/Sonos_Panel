@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Container version="2">
-  <Name>sonos-panel</Name>
-  <Repository>ghcr.io/almulder/sonos-panel:latest</Repository>
-  <Registry>https://github.com/almulder/Sonos_Panel/pkgs/container/sonos-panel</Registry>
+  <Name>sonos_panel</Name>
+  <Repository>ghcr.io/almulder/sonos_panel:latest</Repository>
+  <Registry>https://github.com/almulder/Sonos_Panel/pkgs/container/sonos_panel</Registry>
   <Network>host</Network>
   <!--
     Network is set to "host" deliberately, not bridge -- Sonos

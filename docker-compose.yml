@@ -1,9 +1,9 @@
 services:
-  sonos-panel:
-    build: .
-    # image: ghcr.io/almulder/sonos-panel:latest   # use this instead of `build: .` once published
+  sonos_panel:
+    image: ghcr.io/almulder/sonos_panel:latest
+    # build: .   # use this instead of `image:` for local development
 
-    container_name: sonos-panel
+    container_name: sonos_panel
     restart: unless-stopped
 
     # REQUIRED, not optional: Sonos discovery uses SSDP (UDP multicast)
