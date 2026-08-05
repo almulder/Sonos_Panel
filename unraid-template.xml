@@ -25,9 +25,18 @@
 
     IMPORTANT: requires Network Type = Host (set above) for Sonos
     discovery to work at all -- do not change this to Bridge.
+
+    Port 3000 is used by default. If that's already taken on your
+    server, change the Port variable below to any free port -- since
+    this runs in host networking mode (no port mapping/translation),
+    the app will then listen directly on whatever port you set. Note:
+    the WebUI shortcut button below assumes the default (3000); if you
+    change the port, use http://[your-server-ip]:[your-chosen-port]/
+    directly instead of the shortcut.
   </Overview>
   <Category>MediaApp:Music Other:</Category>
-  <WebUI>http://[IP]:[PORT:3000]/</WebUI>
+  <WebUI>http://[IP]:3000/</WebUI>
   <Icon>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/public/icons/icon-512.png</Icon>
-  <Config Name="Port" Target="3000" Default="3000" Mode="tcp" Description="Port the app listens on. With host networking this is the actual port on the Unraid server itself." Type="Variable" Display="always" Required="true" Mask="false">3000</Config>
+  <Config Name="Port" Target="PORT" Default="3000" Mode="tcp" Description="Port the app listens on (host networking -- no mapping/translation, this is the actual port on the server itself). Change this if 3000 is already used by something else." Type="Variable" Display="always" Required="true" Mask="false">3000</Config>
+  <Config Name="Appdata" Target="/app/data" Default="/mnt/user/appdata/sonos-panel" Mode="rw" Description="Where config.json (the optional Line-In room override) is stored, so it survives container recreation/updates. Change if you want this somewhere other than the standard appdata location." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/sonos-panel</Config>
 </Container>

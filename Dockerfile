@@ -15,8 +15,14 @@ RUN npm install --omit=dev --no-audit --no-fund
 
 COPY server/ ./server/
 COPY public/ ./public/
+COPY data/ ./data/
 
 ENV PORT=3000
+# Where config.json (the optional Line-In room override) lives.
+# Defaults to ./data inside the image, but should be volume-mounted to
+# a host path (see docker-compose.yml / the Unraid template) so it
+# survives container recreation/updates rather than resetting.
+ENV DATA_DIR=/app/data
 EXPOSE 3000
 
 CMD ["node", "server/index.js"]

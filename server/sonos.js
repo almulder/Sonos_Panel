@@ -37,10 +37,14 @@ const debugLog = require('./debugLog');
 // Manual overrides that are more reliable than guessing at UPnP fields --
 // see getLineInRooms() for why this exists. Missing/invalid config.json
 // just means every override defaults to off, not a startup failure.
+// DATA_DIR is configurable (defaults to ./data) specifically so this can
+// be cleanly volume-mounted in Docker without also exposing the rest of
+// the app's own code as a mount target.
+const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 let config = {};
 try {
   // eslint-disable-next-line global-require, import/no-dynamic-require
-  config = require(path.join(__dirname, '..', 'config.json'));
+  config = require(path.join(dataDir, 'config.json'));
 } catch (err) {
   config = {};
 }

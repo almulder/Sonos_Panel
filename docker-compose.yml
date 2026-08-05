@@ -6,6 +6,14 @@ services:
     container_name: sonos_panel
     restart: unless-stopped
 
+    # Persists config.json (the optional Line-In room override) across
+    # container recreation/updates. Change the left side (host path) if
+    # you want this stored somewhere other than the standard Unraid
+    # appdata location -- the right side (container path) should stay
+    # as-is, it matches DATA_DIR set in the Dockerfile.
+    volumes:
+      - /mnt/user/appdata/sonos-panel:/app/data
+
     # REQUIRED, not optional: Sonos discovery uses SSDP (UDP multicast)
     # to find speakers on the local network. Docker's default bridge
     # network isolates the container from the host's network segment,
@@ -16,4 +24,8 @@ services:
     network_mode: host
 
     environment:
+      # Change this if 3000 is already used by something else on your
+      # server -- since this runs in host networking mode (no port
+      # mapping/translation), the app listens directly on whatever
+      # port you set here.
       - PORT=3000
