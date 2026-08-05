@@ -29,3 +29,7 @@ services:
       # mapping/translation), the app listens directly on whatever
       # port you set here.
       - PORT=3000
+      # Accent color (hex) used throughout the UI and the idle
+      # screensaver's color-cycle animation. Any hex color works --
+      # variations are derived from it automatically.
+      - THEME_COLOR=#e8a33d

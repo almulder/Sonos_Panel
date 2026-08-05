@@ -18,6 +18,9 @@ COPY public/ ./public/
 COPY data/ ./data/
 
 ENV PORT=3000
+# Accent color (hex) used throughout the UI and the idle screensaver's
+# color-cycle animation. Override to customize -- see README.md.
+ENV THEME_COLOR="#e8a33d"
 # Where config.json (the optional Line-In room override) lives.
 # Defaults to ./data inside the image, but should be volume-mounted to
 # a host path (see docker-compose.yml / the Unraid template) so it

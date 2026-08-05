@@ -65,6 +65,7 @@ wall panel without any special kiosk software.
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | Port the app listens on |
+| `THEME_COLOR` | `#e8a33d` | Accent color (hex). Drives buttons/highlights and the idle screensaver's color-cycle animation -- variations are derived automatically from whatever color you set. |
 
 No other configuration needed -- Sonos speakers are auto-discovered on
 the local network at startup.
