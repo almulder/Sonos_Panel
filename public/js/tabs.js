@@ -54,6 +54,7 @@ const Tabs = (() => {
     }
 
     const label = document.createElement('span');
+    label.className = 'tabbar__label';
     label.textContent = title;
     btn.appendChild(label);
 
@@ -128,7 +129,7 @@ const Tabs = (() => {
       id: 'sonos',
       title: 'Sonos',
       color: 'var(--amber)',
-      icon: 'icons/icon-192.png'
+      icon: 'icons/tab-icon-sonos.svg'
     }));
 
     // Slots 2-4: fill with configured tabs, pad the rest with blank
