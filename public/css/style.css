@@ -66,7 +66,7 @@ button {
    show a dim version so you can still tell them apart before tapping.
 
    --tab-height is an explicit height (not just a minimum) so the icon
-   (90% of it) and label (80% of it) have a well-defined box to size
+   (80% of it) and label (60% of it) have a well-defined box to size
    against -- bumped up from the base touch target size since content
    at those proportions needs real room, not just the 56px minimum.
 --------------------------------------------------------------------- */
@@ -105,20 +105,20 @@ button {
 }
 
 .tabbar__icon {
-  font-size: calc(var(--tab-height) * 0.9);
+  font-size: calc(var(--tab-height) * 0.8);
   line-height: 1;
   flex-shrink: 0;
 }
 
 .tabbar__icon--img {
-  height: calc(var(--tab-height) * 0.9);
+  height: calc(var(--tab-height) * 0.8);
   width: auto;
   object-fit: contain;
   flex-shrink: 0;
 }
 
 .tabbar__label {
-  font-size: calc(var(--tab-height) * 0.8);
+  font-size: calc(var(--tab-height) * 0.6);
   line-height: 1;
   overflow: hidden;
   text-overflow: ellipsis;
