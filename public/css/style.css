@@ -56,11 +56,14 @@ button {
 
 /* ---------------------------------------------------------------------
    Tab bar
-   One button per tab (Sonos is always first, built-in). Each tab
-   carries its own --tab-color custom property set inline by tabs.js --
-   the active tab gets a solid underline/glow in that color, inactive
-   tabs show a dim version of it so you can still tell them apart at a
-   glance before tapping.
+   A fixed 4-slot grid -- Sonos always occupies the first slot, up to 3
+   extra tabs fill the rest. Every slot is always exactly 25% of the
+   bar's width (flex: 0 0 25%), whether populated or not -- an
+   unconfigured slot renders as blank, non-interactive space rather
+   than letting other tabs stretch to fill the gap. Each tab carries
+   its own --tab-color custom property set inline by tabs.js -- the
+   active tab gets a solid underline/glow in that color, inactive tabs
+   show a dim version so you can still tell them apart before tapping.
 --------------------------------------------------------------------- */
 .tabbar {
   display: flex;
@@ -68,11 +71,13 @@ button {
   padding: 10px 20px 0;
   flex-shrink: 0;
 }
-.tabbar.is-hidden {
-  display: none;
-}
 
 .tabbar__btn {
+  flex: 0 0 calc(25% - 6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   appearance: none;
   border: none;
   background: var(--panel);
@@ -86,6 +91,24 @@ button {
   opacity: 0.55;
   min-height: var(--touch-min);
   transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease, border-bottom-width 0.15s ease;
+}
+
+.tabbar__btn--empty {
+  background: transparent;
+  border-bottom-color: transparent;
+  pointer-events: none;
+}
+
+.tabbar__icon {
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.tabbar__icon--img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
 }
 
 .tabbar__btn.is-active {

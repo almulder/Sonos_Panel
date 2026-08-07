@@ -25,16 +25,19 @@ ENV THEME_COLOR="#e8a33d"
 ENV SCREENSAVER_TIMEOUT_SECONDS=600
 # Up to three extra tabs, each embedding another local dashboard
 # (Hubitat, Home Assistant, etc.) in an iframe alongside the Sonos tab.
-# A tab only appears if its _URL is set -- _TITLE and _COLOR are
-# optional. See README.md.
+# A tab only appears if its _URL is set -- _TITLE, _COLOR, and _ICON
+# are all optional.
 ENV TAB2_TITLE=""
 ENV TAB2_COLOR=""
+ENV TAB2_ICON=""
 ENV TAB2_URL=""
 ENV TAB3_TITLE=""
 ENV TAB3_COLOR=""
+ENV TAB3_ICON=""
 ENV TAB3_URL=""
 ENV TAB4_TITLE=""
 ENV TAB4_COLOR=""
+ENV TAB4_ICON=""
 ENV TAB4_URL=""
 # Where config.json (the optional Line-In room override) lives.
 # Defaults to ./data inside the image, but should be volume-mounted to

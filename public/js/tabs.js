@@ -1,10 +1,11 @@
 // tabs.js
 //
-// Builds the top tab bar. The Sonos tab always exists (it's the
-// pre-built #view-sonos section already in index.html) -- this module
-// adds a button for it, plus one button + one lazily-loaded iframe view
-// per extra tab from config (Hubitat, Home Assistant, or any other local
-// dashboard). Switching tabs just toggles which .view section has
+// Builds the top tab bar as a fixed 4-slot grid: Sonos always occupies
+// the first slot, and up to 3 extra tabs (from config) fill the rest.
+// Each slot always takes exactly 1/4 of the bar's width, whether or not
+// it's actually populated -- an unconfigured slot renders as blank,
+// non-interactive space rather than letting Sonos (or other tabs) grow
+// to fill the gap. Switching tabs toggles which .view section has
 // .is-active, matching the pattern index.html already sets up for the
 // Sonos view.
 //
@@ -14,17 +15,52 @@
 // switching back to it doesn't reload/reset that page's state.
 
 const Tabs = (() => {
+  const TOTAL_SLOTS = 4;
+
   const tabBarEl = document.getElementById('tabBar');
   const contentEl = document.getElementById('content');
 
-  function makeTabButton({ id, title, color }) {
+  function isImageUrl(icon) {
+    return /^(https?:)?\/\//.test(icon) || icon.startsWith('data:');
+  }
+
+  function makeTabButton({ id, title, color, icon }) {
     const btn = document.createElement('button');
     btn.className = 'tabbar__btn';
     btn.dataset.viewId = id;
-    btn.textContent = title;
     btn.style.setProperty('--tab-color', color);
+
+    if (icon) {
+      if (isImageUrl(icon)) {
+        const img = document.createElement('img');
+        img.className = 'tabbar__icon tabbar__icon--img';
+        img.src = icon;
+        img.alt = '';
+        btn.appendChild(img);
+      } else {
+        const span = document.createElement('span');
+        span.className = 'tabbar__icon';
+        span.textContent = icon;
+        btn.appendChild(span);
+      }
+    }
+
+    const label = document.createElement('span');
+    label.textContent = title;
+    btn.appendChild(label);
+
     btn.addEventListener('click', () => activate(id));
     return btn;
+  }
+
+  // Reserves a slot's width without showing anything or being
+  // clickable -- keeps the 4-way split exact even when a tab isn't
+  // configured.
+  function makeEmptySlot() {
+    const el = document.createElement('div');
+    el.className = 'tabbar__btn tabbar__btn--empty';
+    el.setAttribute('aria-hidden', 'true');
+    return el;
   }
 
   function makeIframeView({ id, url }) {
@@ -75,18 +111,20 @@ const Tabs = (() => {
   function init(tabs) {
     if (!tabBarEl) return;
 
-    // Sonos tab always comes first and always exists in the DOM already.
+    // Slot 1 is always Sonos -- it's the pre-built #view-sonos section
+    // already in index.html.
     tabBarEl.appendChild(makeTabButton({ id: 'sonos', title: 'Sonos', color: 'var(--amber)' }));
 
-    tabs.forEach((tab) => {
-      tabBarEl.appendChild(makeTabButton(tab));
-      contentEl.appendChild(makeIframeView(tab));
-    });
-
-    // Hide the tab bar entirely if there's nothing to switch between --
-    // no point showing a single "Sonos" tab with nothing else to tap.
-    if (tabs.length === 0) {
-      tabBarEl.classList.add('is-hidden');
+    // Slots 2-4: fill with configured tabs, pad the rest with blank
+    // reserved slots so the grid always has exactly 4 equal quarters.
+    for (let i = 0; i < TOTAL_SLOTS - 1; i += 1) {
+      const tab = tabs[i];
+      if (tab) {
+        tabBarEl.appendChild(makeTabButton(tab));
+        contentEl.appendChild(makeIframeView(tab));
+      } else {
+        tabBarEl.appendChild(makeEmptySlot());
+      }
     }
 
     activate('sonos');

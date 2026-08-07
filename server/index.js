@@ -23,9 +23,10 @@ const SCREENSAVER_TIMEOUT_SECONDS = Number(process.env.SCREENSAVER_TIMEOUT_SECON
 
 // Up to three extra tabs alongside the built-in Sonos tab, each pointing
 // at another local dashboard/app (Hubitat, Home Assistant, etc.) shown in
-// an iframe. Each tab needs all three of its own vars set (TITLE, URL) to
-// appear -- COLOR is optional and falls back to THEME_COLOR if omitted.
-// A tab is skipped entirely if its URL isn't set.
+// an iframe. Only _URL is required to make a tab appear -- _TITLE,
+// _COLOR, and _ICON are all optional (title falls back to a generic
+// label, color falls back to THEME_COLOR, icon is simply omitted if
+// blank). A tab is skipped entirely if its URL isn't set.
 function buildExtraTabs() {
   const tabs = [];
   for (const n of [2, 3, 4]) {
@@ -35,6 +36,7 @@ function buildExtraTabs() {
       id: `tab${n}`,
       title: process.env[`TAB${n}_TITLE`] || `Tab ${n}`,
       color: process.env[`TAB${n}_COLOR`] || THEME_COLOR,
+      icon: process.env[`TAB${n}_ICON`] || '',
       url
     });
   }

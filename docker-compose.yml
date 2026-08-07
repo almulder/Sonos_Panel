@@ -37,14 +37,19 @@ services:
       - SCREENSAVER_TIMEOUT_SECONDS=600
       # Up to three extra tabs, each embedding another local dashboard
       # (Hubitat, Home Assistant, etc.) alongside the built-in Sonos
-      # tab. A tab only shows up if its _URL is set -- leave all three
+      # tab. A tab only shows up if its _URL is set -- leave all four
       # blank/commented out to just run with the single Sonos tab.
+      # _ICON accepts an emoji or a full image URL, shown at the start
+      # of the tab.
       # - TAB2_TITLE=Hubitat
       # - TAB2_COLOR=#4a90d9
+      # - TAB2_ICON=🏠
       # - TAB2_URL=http://10.1.10.50/dashboard
       # - TAB3_TITLE=Home Assistant
       # - TAB3_COLOR=#41bdf5
+      # - TAB3_ICON=🏡
       # - TAB3_URL=http://10.1.10.60:8123
       # - TAB4_TITLE=
       # - TAB4_COLOR=
+      # - TAB4_ICON=
       # - TAB4_URL=
