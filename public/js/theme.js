@@ -1,7 +1,8 @@
 // theme.js
 //
-// Reads the user-selected accent color (THEME_COLOR env var, exposed via
-// GET /api/theme) and applies it in two places:
+// Applies a chosen accent color (hex) in two places. Call Theme.apply(hex)
+// once app.js has loaded config from config.js -- this module doesn't
+// fetch anything itself.
 //   1. Overrides the --amber / --amber-dim CSS custom properties on :root.
 //      The rest of style.css already builds --accent/--accent-dim from
 //      these (`--accent: var(--amber);`), so every button, highlight, and
@@ -14,8 +15,8 @@
 //      the ambient screensaver matches instead of staying hardcoded to
 //      amber.
 //
-// Falls back to the original amber (#e8a33d) if the fetch fails for any
-// reason, so a config hiccup never leaves the UI colorless or broken.
+// Falls back to the original amber (#e8a33d) if an invalid/missing value
+// is passed in.
 
 const Theme = (() => {
   const DEFAULT_COLOR = '#e8a33d';
@@ -107,22 +108,11 @@ const Theme = (() => {
     styleEl.textContent = css;
   }
 
-  async function init() {
-    let color = DEFAULT_COLOR;
-    try {
-      const res = await fetch('/api/theme');
-      const data = await res.json();
-      if (isValidHex(data && data.color)) {
-        color = data.color;
-      }
-    } catch (err) {
-      // Keep default -- a theme fetch failure shouldn't break the app.
-    }
+  function apply(hex) {
+    const color = isValidHex(hex) ? hex : DEFAULT_COLOR;
     applyAccent(color);
     applyScreensaverCycle(color);
   }
 
-  return { init };
+  return { apply };
 })();
-
-Theme.init();

@@ -13,9 +13,10 @@
 //     instead of a static screen.
 
 const Screensaver = (() => {
-  // Short for testing -- bump to something like 10 * 60 * 1000 (10 min)
-  // for real use.
-  const INACTIVITY_MS = 30 * 1000;
+  // Overridden by whatever's passed into init() (from SCREENSAVER_TIMEOUT_SECONDS
+  // via config.js) -- this is only the fallback if init() is called with
+  // nothing.
+  let INACTIVITY_MS = 600 * 1000;
   const CONTENT_REFRESH_MS = 1000;
 
   const overlay = document.getElementById('screensaverOverlay');
@@ -130,7 +131,10 @@ const Screensaver = (() => {
   });
 
   return {
-    init() {
+    init(timeoutMs) {
+      if (typeof timeoutMs === 'number' && timeoutMs > 0) {
+        INACTIVITY_MS = timeoutMs;
+      }
       resetTimer();
     }
   };

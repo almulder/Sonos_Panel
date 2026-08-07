@@ -21,6 +21,21 @@ ENV PORT=3000
 # Accent color (hex) used throughout the UI and the idle screensaver's
 # color-cycle animation. Override to customize -- see README.md.
 ENV THEME_COLOR="#e8a33d"
+# Seconds of no touch/click before the screensaver activates.
+ENV SCREENSAVER_TIMEOUT_SECONDS=600
+# Up to three extra tabs, each embedding another local dashboard
+# (Hubitat, Home Assistant, etc.) in an iframe alongside the Sonos tab.
+# A tab only appears if its _URL is set -- _TITLE and _COLOR are
+# optional. See README.md.
+ENV TAB2_TITLE=""
+ENV TAB2_COLOR=""
+ENV TAB2_URL=""
+ENV TAB3_TITLE=""
+ENV TAB3_COLOR=""
+ENV TAB3_URL=""
+ENV TAB4_TITLE=""
+ENV TAB4_COLOR=""
+ENV TAB4_URL=""
 # Where config.json (the optional Line-In room override) lives.
 # Defaults to ./data inside the image, but should be volume-mounted to
 # a host path (see docker-compose.yml / the Unraid template) so it

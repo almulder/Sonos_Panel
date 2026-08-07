@@ -16,6 +16,8 @@ around the house.
 - An ambient screensaver after a period of inactivity -- bouncing
   now-playing display while something's playing, a slow color-cycling
   "sound wave rings" animation when idle
+- Up to 3 extra tabs alongside Sonos, each embedding another local
+  dashboard (Hubitat, Home Assistant, or anything else on your LAN)
 
 ## Quick start (Docker)
 
@@ -66,9 +68,33 @@ wall panel without any special kiosk software.
 |---|---|---|
 | `PORT` | `3000` | Port the app listens on |
 | `THEME_COLOR` | `#e8a33d` | Accent color (hex). Drives buttons/highlights and the idle screensaver's color-cycle animation -- variations are derived automatically from whatever color you set. |
+| `SCREENSAVER_TIMEOUT_SECONDS` | `600` | Seconds of no touch/click before the screensaver activates. |
+| `TAB2_TITLE`, `TAB2_COLOR`, `TAB2_URL` | *(unset)* | An extra tab embedding another local dashboard in an iframe. Only `_URL` is required -- `_TITLE` falls back to "Tab 2" and `_COLOR` falls back to `THEME_COLOR` if omitted. Leave `_URL` unset to not show this tab at all. |
+| `TAB3_TITLE`, `TAB3_COLOR`, `TAB3_URL` | *(unset)* | Same as above, for a third tab. |
+| `TAB4_TITLE`, `TAB4_COLOR`, `TAB4_URL` | *(unset)* | Same as above, for a fourth tab. |
 
 No other configuration needed -- Sonos speakers are auto-discovered on
 the local network at startup.
+
+### Extra tabs
+
+The Sonos tab is always present and always first. Setting `TAB2_URL`
+(and optionally `TAB2_TITLE`/`TAB2_COLOR`) adds a second tab that
+embeds that URL in an iframe -- useful for a Hubitat dashboard, a Home
+Assistant dashboard, or any other page on your local network you want
+reachable from the same wall panel. `TAB3_*`/`TAB4_*` work the same
+way for a third and fourth tab. The screensaver activates over
+whichever tab is currently open and covers the whole screen regardless
+of which tab you're on.
+
+Each tab's `_COLOR` sets the color of its underline in the tab bar --
+purely cosmetic, just makes it easier to tell tabs apart at a glance.
+
+Since embedded pages load in an iframe, sites that explicitly block
+being framed (via an `X-Frame-Options` or `Content-Security-Policy`
+header) won't display -- this is essentially never an issue for
+self-hosted local dashboards like Hubitat or Home Assistant, which
+don't set those headers by default.
 
 ## How it's built
 
@@ -84,6 +110,9 @@ public/
   css/style.css        All styling -- dark theme, amber accent
   icons/                App icon (SVG source + generated PNGs)
   js/
+    config.js            Fetches /api/config once at boot (color, screensaver timeout, tabs)
+    theme.js              Applies the chosen accent color + derives the screensaver's color-cycle palette from it
+    tabs.js               Builds the tab bar + extra iframe tabs, handles tab switching
     app.js              WebSocket client, volume rail routing, fullscreen toggle
     sonosView.js        Room list, now-playing, source browsing, grouping UI
     screensaver.js       Inactivity timer + bounce/rings animation logic

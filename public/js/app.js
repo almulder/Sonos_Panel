@@ -7,6 +7,9 @@
 (function () {
   // ---------------- Fullscreen now-playing ----------------
   // Hides the room list / chrome and enlarges the now-playing view.
+  // Tapping anywhere on the enlarged card's background (not on the
+  // transport buttons) exits back to the normal layout -- there was
+  // previously no way back out once fullscreen was entered.
 
   const sonosFullscreenBtn = document.getElementById('sonosFullscreenBtn');
   const sonosSonostop = document.getElementById('sonosSonostop');
@@ -21,7 +24,19 @@
     sonosSonostop.classList.remove('sonostop--stage');
   }
 
-  sonosFullscreenBtn.addEventListener('click', enterFullscreen);
+  sonosFullscreenBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    enterFullscreen();
+  });
+
+  // Any tap inside the stage while fullscreen is active exits, unless
+  // it landed on an actual control (transport buttons) -- those need to
+  // keep working normally without also kicking you out of fullscreen.
+  sonosSonostop.addEventListener('click', (e) => {
+    if (!appEl.classList.contains('is-fullscreen')) return;
+    if (e.target.closest('.transport__btn')) return;
+    exitFullscreen();
+  });
 
   // ---------------- Volume rail routing ----------------
   // SonosView already syncs the rail whenever a room is focused, so
@@ -57,9 +72,13 @@
   // ---------------- Boot ----------------
 
   async function init() {
+    const config = await AppConfig.load();
+    Theme.apply(config.color);
+    Tabs.init(config.tabs);
+
     await SonosView.init();
     connectSocket();
-    Screensaver.init();
+    Screensaver.init(config.screensaverTimeoutMs);
   }
 
   init();

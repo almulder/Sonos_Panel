@@ -15,6 +15,32 @@ const PORT = process.env.PORT || 3000;
 // highlights, borders) and the idle screensaver's color-cycle animation --
 // see public/js/theme.js for how it's applied client-side.
 const THEME_COLOR = process.env.THEME_COLOR || '#e8a33d';
+
+// How long with no touch/click before the screensaver kicks in. Default
+// matches what felt right for a wall-mounted panel that's glanced at
+// occasionally, not actively used continuously.
+const SCREENSAVER_TIMEOUT_SECONDS = Number(process.env.SCREENSAVER_TIMEOUT_SECONDS) || 600;
+
+// Up to three extra tabs alongside the built-in Sonos tab, each pointing
+// at another local dashboard/app (Hubitat, Home Assistant, etc.) shown in
+// an iframe. Each tab needs all three of its own vars set (TITLE, URL) to
+// appear -- COLOR is optional and falls back to THEME_COLOR if omitted.
+// A tab is skipped entirely if its URL isn't set.
+function buildExtraTabs() {
+  const tabs = [];
+  for (const n of [2, 3, 4]) {
+    const url = process.env[`TAB${n}_URL`];
+    if (!url) continue;
+    tabs.push({
+      id: `tab${n}`,
+      title: process.env[`TAB${n}_TITLE`] || `Tab ${n}`,
+      color: process.env[`TAB${n}_COLOR`] || THEME_COLOR,
+      url
+    });
+  }
+  return tabs;
+}
+
 const POLL_INTERVAL_MS = 2000;
 const SONOS_FAST_POLL_INTERVAL_MS = 500;
 
@@ -68,10 +94,16 @@ process.on('uncaughtException', (err) => {
   debugLog.error('server', `Uncaught exception: ${err.message}`);
 });
 
-// ---------------- Theme ----------------
+// ---------------- App config ----------------
+// Single endpoint the client fetches once at boot -- color, screensaver
+// timing, and extra tabs all come from here rather than separate calls.
 
-app.get('/api/theme', (req, res) => {
-  res.json({ color: THEME_COLOR });
+app.get('/api/config', (req, res) => {
+  res.json({
+    color: THEME_COLOR,
+    screensaverTimeoutMs: SCREENSAVER_TIMEOUT_SECONDS * 1000,
+    tabs: buildExtraTabs()
+  });
 });
 
 // ---------------- Sonos routes ----------------
