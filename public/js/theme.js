@@ -9,11 +9,10 @@
 //      border in the app picks up the new color automatically -- no other
 //      CSS changes needed.
 //   2. Regenerates the screensaver's idle "rings" color-cycle animation.
-//      The original was six hand-picked warm/cool hex stops; this derives
-//      an equivalent six-stop sweep (three variations near the chosen
-//      color, three near its complement) from whatever color is set, so
-//      the ambient screensaver matches instead of staying hardcoded to
-//      amber.
+//      All six stops stay within the chosen color's own hue -- only
+//      lightness/saturation vary -- so the ambient screensaver always
+//      matches whatever color was picked instead of drifting into an
+//      unrelated hue.
 //
 // Falls back to the original amber (#e8a33d) if an invalid/missing value
 // is passed in.
@@ -77,17 +76,16 @@ const Theme = (() => {
 
   function applyScreensaverCycle(hex) {
     const { h, s, l } = hexToHsl(hex);
-    const warm = [
-      hslToHex(h - 15, s, l * 0.55),
-      hslToHex(h, s, l * 0.8),
-      hslToHex(h + 18, s * 0.9, Math.min(l * 1.15, 70))
-    ];
-    const cool = [
-      hslToHex(h + 165, s * 0.75, l * 0.55),
-      hslToHex(h + 180, s * 0.8, l * 0.7),
-      hslToHex(h + 195, s * 0.6, l * 0.4)
-    ];
-    const stops = [...warm, ...cool];
+    // Six stops, all at the SAME hue as the chosen color -- only
+    // lightness (and a touch of saturation) varies, so the animation
+    // reads as the color gently breathing brighter/dimmer rather than
+    // drifting into an unrelated hue (the previous version swept into
+    // the complementary color, which landed on blue/teal regardless of
+    // what was actually picked).
+    const dark = hslToHex(h, s, Math.max(l * 0.45, 15));
+    const mid = hslToHex(h, s, Math.max(l * 0.7, 30));
+    const bright = hslToHex(h, s * 0.9, Math.min(l * 1.25, 78));
+    const stops = [dark, mid, bright, mid, dark, mid];
 
     const css = `@keyframes screensaver-colorcycle {
       0%, 14% { stroke: ${stops[0]}; }
@@ -114,5 +112,5 @@ const Theme = (() => {
     applyScreensaverCycle(color);
   }
 
-  return { apply };
+  return { apply, applyScreensaverCycle };
 })();

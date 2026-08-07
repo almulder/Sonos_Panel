@@ -74,7 +74,7 @@
   async function init() {
     const config = await AppConfig.load();
     Theme.apply(config.color);
-    Tabs.init(config.tabs);
+    Tabs.init(config.tabs, config.color);
 
     await SonosView.init();
     connectSocket();

@@ -1,7 +1,9 @@
 // screensaver.js
 //
 // Activates after a period of no touch/click interaction anywhere on
-// the page. Reads current state directly from SonosView (which is
+// the page -- one shared inactivity timer covers Sonos and every extra
+// tab, since the overlay sits above all of them regardless of which is
+// active. Reads current state directly from SonosView (which is
 // already tracking it from the regular polling) rather than polling
 // independently -- this module just decides what to show and animates
 // it.
@@ -9,8 +11,9 @@
 // Content modes:
 //   - "bounce": something's actually playing -- DVD-logo-style
 //     bouncing album art/title/artist.
-//   - "rings": nothing playing -- a calmer ambient rings animation
-//     instead of a static screen.
+//   - "rings": nothing playing -- a calmer ambient rings animation,
+//     recolored via Theme.applyScreensaverCycle() to match whichever
+//     tab was active when the screensaver kicked in (see activate()).
 
 const Screensaver = (() => {
   // Overridden by whatever's passed into init() (from SCREENSAVER_TIMEOUT_SECONDS
@@ -98,6 +101,16 @@ const Screensaver = (() => {
   function activate() {
     if (active) return;
     active = true;
+
+    // Match the screensaver's color-cycle to whichever tab was open
+    // when it kicked in -- Sonos and every extra tab share this same
+    // inactivity timer, but each shows the screensaver in its own
+    // configured color.
+    if (typeof Tabs !== 'undefined' && typeof Theme !== 'undefined') {
+      const color = Tabs.getActiveColor();
+      if (color) Theme.applyScreensaverCycle(color);
+    }
+
     applyContent();
     overlay.classList.add('is-active');
 

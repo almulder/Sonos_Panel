@@ -20,8 +20,16 @@ const Tabs = (() => {
   const tabBarEl = document.getElementById('tabBar');
   const contentEl = document.getElementById('content');
 
+  // Real hex color per tab id -- used by the screensaver to recolor
+  // itself to match whichever tab is active when it kicks in. Keyed
+  // separately from the --tab-color CSS custom property (which can
+  // hold a var() reference like "var(--amber)" for Sonos, not usable
+  // directly in the hex math the screensaver's color-cycle needs).
+  const colorMap = {};
+  let activeId = 'sonos';
+
   function isImageUrl(icon) {
-    return /^(https?:)?\/\//.test(icon) || icon.startsWith('data:');
+    return /^(https?:)?\/\//.test(icon) || icon.startsWith('data:') || /\.(png|jpe?g|gif|svg|webp)(\?.*)?$/i.test(icon);
   }
 
   function makeTabButton({ id, title, color, icon }) {
@@ -87,6 +95,7 @@ const Tabs = (() => {
   }
 
   function activate(id) {
+    activeId = id;
     document.querySelectorAll('.view').forEach((el) => {
       const isTarget = el.id === `view-${id}`;
       el.classList.toggle('is-active', isTarget);
@@ -108,18 +117,26 @@ const Tabs = (() => {
     }
   }
 
-  function init(tabs) {
+  function init(tabs, sonosColor) {
     if (!tabBarEl) return;
+
+    colorMap.sonos = sonosColor;
 
     // Slot 1 is always Sonos -- it's the pre-built #view-sonos section
     // already in index.html.
-    tabBarEl.appendChild(makeTabButton({ id: 'sonos', title: 'Sonos', color: 'var(--amber)' }));
+    tabBarEl.appendChild(makeTabButton({
+      id: 'sonos',
+      title: 'Sonos',
+      color: 'var(--amber)',
+      icon: 'icons/sonos.png'
+    }));
 
     // Slots 2-4: fill with configured tabs, pad the rest with blank
     // reserved slots so the grid always has exactly 4 equal quarters.
     for (let i = 0; i < TOTAL_SLOTS - 1; i += 1) {
       const tab = tabs[i];
       if (tab) {
+        colorMap[tab.id] = tab.color;
         tabBarEl.appendChild(makeTabButton(tab));
         contentEl.appendChild(makeIframeView(tab));
       } else {
@@ -130,5 +147,8 @@ const Tabs = (() => {
     activate('sonos');
   }
 
-  return { init };
+  return {
+    init,
+    getActiveColor: () => colorMap[activeId] || colorMap.sonos
+  };
 })();
