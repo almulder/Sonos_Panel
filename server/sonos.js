@@ -974,16 +974,51 @@ async function setLoudness(roomName, enabled) {
   await guarded(`setLoudness(${roomName})`, () => device.renderingControlService().SetLoudness(enabled));
 }
 
+// Before creating a new grouping, fully dissolve any EXISTING group
+// that shares at least one room with the target set -- rather than
+// relying on Sonos's own per-device "leave old group, join new one"
+// behavior when a room moves between groups, which didn't reliably
+// leave a clean result in practice. This is a deliberate
+// simplification: touching any member of a conflicting group tears
+// the WHOLE thing down first, then the new group gets created fresh,
+// so there's never a leftover partial/orphaned group hanging around.
+async function resolveGroupConflicts(targetRoomNames) {
+  if (usingMock) return [];
+  const targets = new Set(targetRoomNames);
+
+  // Every coordinator whose CURRENT group includes at least one target
+  // room -- whether that target room is a plain member, or is itself
+  // the coordinator of a group that has other members not in the
+  // target set.
+  const coordinatorsToDissolve = new Set();
+  Object.keys(lastCoordinatorMap).forEach((name) => {
+    const coord = lastCoordinatorMap[name];
+    if (coord === name) return; // not actually grouped with anyone
+    if (targets.has(name) || targets.has(coord)) coordinatorsToDissolve.add(coord);
+  });
+  if (coordinatorsToDissolve.size === 0) return [];
+
+  const membersToUngroup = Object.keys(lastCoordinatorMap).filter(
+    (name) => coordinatorsToDissolve.has(lastCoordinatorMap[name]) && name !== lastCoordinatorMap[name]
+  );
+  await Promise.allSettled(membersToUngroup.map((name) => ungroupRoom(name)));
+  // Rooms that are about to join the NEW target group don't need to be
+  // reported as "dissolved to standalone" -- they're getting a real
+  // coordinator patch moments later anyway from the join itself.
+  return membersToUngroup.filter((name) => !targets.has(name));
+}
+
 async function groupRooms(roomNames) {
-  if (!roomNames || roomNames.length < 2) return { succeeded: [], failed: [] };
+  if (!roomNames || roomNames.length < 2) return { succeeded: [], failed: [], dissolved: [] };
   if (usingMock) {
     const [coordinatorName, ...members] = roomNames;
     members.forEach((name) => {
       const room = mockState.rooms.find((r) => r.name === name);
       if (room) room.coordinator = coordinatorName;
     });
-    return { succeeded: members, failed: [] };
+    return { succeeded: members, failed: [], dissolved: [] };
   }
+  const dissolved = await resolveGroupConflicts(roomNames);
   const [coordinatorName, ...members] = roomNames;
   // Promise.allSettled, not Promise.all: a saved group with one
   // unreachable room (unplugged, rebooting, Wi-Fi hiccup) shouldn't
@@ -1013,7 +1048,7 @@ async function groupRooms(roomNames) {
       debugLog.warn('sonos', `groupRooms: ${members[i]} did not join -- ${result.reason && result.reason.message}`);
     }
   });
-  return { succeeded, failed };
+  return { succeeded, failed, dissolved };
 }
 
 // Immediately reflects an intended topology change in the cache, ahead
@@ -1053,11 +1088,23 @@ async function ungroupRoom(roomName) {
   if (usingMock) {
     const room = mockState.rooms.find((r) => r.name === roomName);
     if (room) room.coordinator = roomName;
-    return;
+    return { reachable: true };
   }
   const device = findDevice(roomName);
-  if (!device) return;
-  await guarded(`ungroupRoom(${roomName})`, () => device.leaveGroup());
+  if (!device) return { reachable: true };
+  try {
+    await device.leaveGroup();
+    return { reachable: true };
+  } catch (err) {
+    // Deliberately NOT re-throwing -- a device that's unreachable
+    // (unplugged, Wi-Fi dropped) can't actually receive this command,
+    // but that shouldn't block the panel from reflecting "ungrouped"
+    // locally. Letting this throw was the actual bug: it aborted the
+    // route handler before the optimistic UI patch ever ran, leaving
+    // the room stuck showing as grouped with no way to remove it.
+    debugLog.warn('sonos', `ungroupRoom(${roomName}) failed, likely unreachable: ${err.message}`);
+    return { reachable: false };
+  }
 }
 
 // ---------------------------------------------------------------------

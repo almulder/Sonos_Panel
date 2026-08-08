@@ -128,6 +128,7 @@ function buildSourceIcon(group) {
 
 const SonosView = (() => {
   const roomListEl = document.getElementById('roomList');
+  const roomlistPullIndicator = document.getElementById('roomlistPullIndicator');
   const roomlistPanel = document.getElementById('sonosRoomlist');
   const roomlistLabel = document.getElementById('roomlistLabel');
   const roomlistBackBtn = document.getElementById('roomlistBackBtn');
@@ -332,7 +333,8 @@ const SonosView = (() => {
 
     const name = document.createElement('span');
     name.className = 'roomrow__name';
-    name.textContent = room.name;
+    name.textContent = room.reachable === false ? `${room.name} (disconnected)` : room.name;
+    if (room.reachable === false) li.classList.add('is-disconnected');
     nameLine.appendChild(name);
 
     if (members.length > 0) {
@@ -347,7 +349,8 @@ const SonosView = (() => {
     if (members.length > 0) {
       const sub = document.createElement('div');
       sub.className = 'roomrow__sublabel';
-      sub.textContent = `with ${members.map((m) => m.name).join(', ')}`;
+      const memberLabels = members.map((m) => (m.reachable === false ? `${m.name} (disconnected)` : m.name));
+      sub.textContent = `with ${memberLabels.join(', ')}`;
       main.appendChild(sub);
     }
 
@@ -388,7 +391,8 @@ const SonosView = (() => {
     }
     const name = document.createElement('span');
     name.className = 'roomrow__name';
-    name.textContent = room.name;
+    name.textContent = room.reachable === false ? `${room.name} (disconnected)` : room.name;
+    if (room.reachable === false) li.classList.add('is-disconnected');
     main.appendChild(name);
     li.appendChild(main);
 
@@ -467,6 +471,47 @@ const SonosView = (() => {
     }
     render();
   }
+
+  // Pull-to-refresh -- forces a genuinely fresh live query (the same
+  // one refreshRooms always does, which includes a real reachability
+  // check per room), so a room that's been reconnected shows back up
+  // without needing a full page reload. Touch-only: only fires when
+  // the list is already scrolled to the very top and the person pulls
+  // down past a small threshold, so it doesn't fight with normal
+  // scrolling.
+  (function setupPullToRefresh() {
+    let startY = null;
+    let pulling = false;
+    const THRESHOLD = 60;
+
+    roomListEl.addEventListener('touchstart', (e) => {
+      startY = roomListEl.scrollTop <= 0 ? e.touches[0].clientY : null;
+    }, { passive: true });
+
+    roomListEl.addEventListener('touchmove', (e) => {
+      if (startY === null) return;
+      const delta = e.touches[0].clientY - startY;
+      pulling = delta > THRESHOLD && roomListEl.scrollTop <= 0;
+    }, { passive: true });
+
+    roomListEl.addEventListener('touchend', async () => {
+      if (pulling) {
+        pulling = false;
+        roomlistPullIndicator.classList.add('is-active');
+        try {
+          if (showingGroupsPanel) {
+            await refreshRooms();
+            await refreshSavedGroups();
+          } else {
+            await refreshRooms();
+          }
+        } finally {
+          roomlistPullIndicator.classList.remove('is-active');
+        }
+      }
+      startY = null;
+    }, { passive: true });
+  })();
 
   // ---------------- Saved group presets ----------------
   // Local equivalent of the official Sonos app's "Saved Groups" (that
@@ -554,7 +599,12 @@ const SonosView = (() => {
       main.appendChild(nameLine);
       const sub = document.createElement('div');
       sub.className = 'roomrow__sublabel';
-      sub.textContent = group.rooms.join(', ');
+      const liveByName = new Map(rooms.map((r) => [r.name, r]));
+      const roomLabels = group.rooms.map((n) => {
+        const live = liveByName.get(n);
+        return (!live || live.reachable === false) ? `${n} (disconnected)` : n;
+      });
+      sub.textContent = roomLabels.join(', ');
       main.appendChild(sub);
       li.appendChild(main);
 
@@ -713,10 +763,18 @@ const SonosView = (() => {
     const extraOfflineNames = existingGroup
       ? existingGroup.rooms.filter((n) => !liveNames.has(n))
       : [];
-    const allEntries = [
+    let allEntries = [
       ...rooms.map((r) => ({ name: r.name, disconnected: r.reachable === false })),
       ...extraOfflineNames.map((n) => ({ name: n, disconnected: true }))
     ];
+    // Creating a brand new group: disconnected rooms simply don't show
+    // up at all, since there's nothing to save them into yet. Editing
+    // an existing group: keep showing them (clearly labeled) so a
+    // disconnected member can still be seen and, if wanted, permanently
+    // removed rather than waiting for it to reconnect.
+    if (!existingGroup) {
+      allEntries = allEntries.filter((entry) => !entry.disconnected);
+    }
 
     allEntries.forEach((entry) => {
       const row = document.createElement('label');

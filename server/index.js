@@ -238,12 +238,15 @@ app.post('/api/sonos/room/:room/group-mute', asyncHandler(async (req, res) => {
 
 app.post('/api/sonos/group', asyncHandler(async (req, res) => {
   const [coordinatorName] = req.body.rooms;
-  const { succeeded, failed } = await sonos.groupRooms(req.body.rooms);
+  const { succeeded, failed, dissolved } = await sonos.groupRooms(req.body.rooms);
   // Reflect the intended grouping immediately, rather than waiting on
   // Sonos's own join-settling time (which can genuinely take several
   // seconds) before the UI shows anything. Only the rooms that actually
   // joined get patched -- a room that failed (unplugged, unreachable)
-  // shouldn't show as grouped when it isn't really.
+  // shouldn't show as grouped when it isn't really. Rooms dissolved out
+  // of a conflicting prior group (see resolveGroupConflicts) get
+  // patched back to being their own coordinator, so that group doesn't
+  // keep showing a member that's actually left.
   //
   // Deliberately NOT triggering a fast-poll burst here anymore: a burst
   // would re-check real topology every 500ms for the next 5 seconds,
@@ -255,21 +258,24 @@ app.post('/api/sonos/group', asyncHandler(async (req, res) => {
   // now delivers genuine confirmation the moment Sonos actually
   // finishes, with the slow 15s baseline poll as an ultimate fallback
   // if that event is ever missed.
+  dissolved.forEach((name) => sonos.patchCoordinatorOptimistically([name], name));
   if (succeeded.length > 0) {
     sonos.patchCoordinatorOptimistically([coordinatorName, ...succeeded], coordinatorName);
-    if (broadcastNow) broadcastNow();
   }
+  if ((succeeded.length > 0 || dissolved.length > 0) && broadcastNow) broadcastNow();
   res.json({ ok: true, succeeded, failed });
 }));
 
 app.post('/api/sonos/room/:room/ungroup', asyncHandler(async (req, res) => {
-  await sonos.ungroupRoom(req.params.room);
-  // Ungrouping makes a room its own coordinator again. Same reasoning
-  // as /api/sonos/group above -- no fast-poll burst, rely on the
-  // optimistic patch plus the real ZonesChanged event confirmation.
+  const result = await sonos.ungroupRoom(req.params.room);
+  // Ungrouping makes a room its own coordinator again -- reflected
+  // locally regardless of whether the physical command actually
+  // reached the device (see ungroupRoom in sonos.js: a disconnected
+  // room can't receive the command, but the panel should still be able
+  // to show it as ungrouped rather than getting stuck).
   sonos.patchCoordinatorOptimistically([req.params.room], req.params.room);
   if (broadcastNow) broadcastNow();
-  res.json({ ok: true });
+  res.json({ ok: true, reachable: result.reachable });
 }));
 
 // ---------------- Saved group presets ----------------

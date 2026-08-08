@@ -328,6 +328,26 @@ button {
   text-align: center;
 }
 
+.roomlist__pullindicator {
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 12px;
+  text-align: center;
+  transition: opacity 0.15s ease;
+}
+.roomlist__pullindicator.is-active {
+  height: 24px;
+  opacity: 1;
+}
+
+.roomrow.is-disconnected .roomrow__name {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
 /* The "GROUPS" entry row sits above the normal rooms, same visual
    weight as a room row so it reads as part of the same list. */
 .roomrow--groups-entry {
