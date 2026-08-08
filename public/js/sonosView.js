@@ -172,11 +172,7 @@ const SonosView = (() => {
     // list re-renders mid-drag (innerHTML is fully rebuilt below) --
     // simplest fix is to just skip re-rendering while a drag is active
     // and catch up once it ends.
-    if (sliderDragActive) {
-      console.log('[render diag] SKIPPED -- sliderDragActive is stuck true');
-      return;
-    }
-    console.log('[render diag] running, top-level rooms=%o', getTopLevelRooms().map((r) => r.name));
+    if (sliderDragActive) return;
 
     // Size the name column to the widest room name actually present,
     // instead of letting it flex-stretch to fill all remaining width
@@ -311,7 +307,14 @@ const SonosView = (() => {
     checkbox.addEventListener('click', async (e) => {
       e.stopPropagation();
       await api(`/api/sonos/room/${encodeURIComponent(room.name)}/ungroup`, { method: 'POST' });
-      await refreshRooms();
+      // Deliberately not calling refreshRooms() here -- that makes a
+      // fresh live REST call straight to a Sonos device for current
+      // topology, which can race against Sonos's own join/leave
+      // settling time and come back reporting the OLD topology even
+      // though our server (and the websocket broadcast that already
+      // arrived) already has the correct, current picture. Just
+      // re-render with whatever `rooms` already holds.
+      render();
     });
     li.appendChild(checkbox);
 
@@ -370,7 +373,13 @@ const SonosView = (() => {
       });
       pendingGroupSelection.clear();
       expandedCoordinators.add(anchor);
-      await refreshRooms();
+      // Deliberately not calling refreshRooms() here -- see the same
+      // reasoning in buildMemberRow's ungroup handler. The websocket
+      // broadcast that fires right after the join (see the optimistic
+      // patch server-side) already updates the shared `rooms` here,
+      // so just re-render with that rather than racing a fresh live
+      // topology fetch against Sonos's own settling time.
+      render();
     } else {
       render();
     }
@@ -802,11 +811,6 @@ const SonosView = (() => {
     async refreshFromSocket(newRooms) {
       const newRoomsJson = JSON.stringify(newRooms);
       const changed = newRoomsJson !== lastRoomsJson;
-      console.log(
-        '[ws diag] changed=%s coordinators=%o',
-        changed,
-        newRooms.map((r) => `${r.name}->${r.coordinator}`)
-      );
       lastRoomsJson = newRoomsJson;
       rooms = newRooms;
       if (changed) render();
