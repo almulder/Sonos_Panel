@@ -819,6 +819,101 @@ const MUSIC_LIBRARY_CATEGORIES = [
   { id: 'A:PLAYLISTS', title: 'Imported Playlists' },
   { id: 'S:', title: 'Folders' }
 ];
+// ---------------------------------------------------------------------
+// Playlist write probe (throwaway / diagnostic)
+//
+// Sonos Playlists (SQ:) can be created and appended to over the local
+// API -- unlike Imported Playlists (A:PLAYLISTS), which are M3U files
+// on the share that Sonos only indexes read-only.
+//
+// The open question this answers: which metadata does AddURIToSavedQueue
+// actually accept for a local library track? The library's own
+// addToPlaylist() auto-generates generic metadata, and this project has
+// already been burned once by that -- auto-generated metadata was
+// rejected with a UPnP 501 during playback work, and passing the item's
+// own r:resMD was what fixed it. So this deliberately tries BOTH and
+// reports each result rather than assuming.
+//
+// Creates a real playlist named "ZZ Panel Test" that shows up in the
+// Sonos app. Remove it with deleteProbePlaylist() when done.
+async function playlistWriteProbe() {
+  const steps = [];
+  const device = devicesByName.values().next().value;
+  if (!device) return { ok: false, steps: [{ step: 'find device', ok: false }] };
+
+  // 1. Grab a real track from the music library to work with.
+  const { items } = await browseContainerPaged(null, 'A:TRACKS', 0, 1);
+  const track = items && items[0];
+  steps.push({
+    step: 'browse A:TRACKS for a sample track',
+    ok: !!(track && track.uri),
+    title: track ? track.title : null,
+    uri: track ? track.uri : null,
+    hasOwnMetadata: !!(track && track.metadata)
+  });
+  if (!track || !track.uri) return { ok: false, steps };
+
+  // 2. Create the playlist.
+  let assignedObjectId = null;
+  try {
+    const created = await device.createPlaylist('ZZ Panel Test');
+    assignedObjectId = created.AssignedObjectID;
+    steps.push({ step: 'createPlaylist("ZZ Panel Test")', ok: !!assignedObjectId, assignedObjectId });
+  } catch (err) {
+    steps.push({ step: 'createPlaylist("ZZ Panel Test")', ok: false, error: err.message });
+    return { ok: false, steps };
+  }
+  if (!assignedObjectId) return { ok: false, steps };
+  const playlistId = String(assignedObjectId).replace(/^SQ:/, '');
+
+  // 3a. Attempt A -- the library's own helper (auto-generated metadata).
+  try {
+    const r = await device.addToPlaylist(playlistId, track.uri);
+    steps.push({ step: 'addToPlaylist() [auto-generated metadata]', ok: Number(r.NumTracksAdded) > 0, result: r });
+  } catch (err) {
+    steps.push({ step: 'addToPlaylist() [auto-generated metadata]', ok: false, error: err.message });
+  }
+
+  // 3b. Attempt B -- raw action, passing the track's OWN r:resMD, which
+  // is what made playback work correctly for service-backed items.
+  try {
+    const current = await device.getPlaylist(playlistId);
+    const r = await device.avTransportService().AddURIToSavedQueue({
+      InstanceID: 0,
+      ObjectID: `SQ:${playlistId}`,
+      UpdateID: current.updateID,
+      EnqueuedURI: Helpers.EncodeXml(track.uri),
+      EnqueuedURIMetaData: Helpers.EncodeXml(track.metadata || ''),
+      AddAtIndex: 4294967295
+    });
+    steps.push({ step: "AddURIToSavedQueue [track's own r:resMD]", ok: Number(r.NumTracksAdded) > 0, result: r });
+  } catch (err) {
+    steps.push({ step: "AddURIToSavedQueue [track's own r:resMD]", ok: false, error: err.message });
+  }
+
+  // 4. Read it back -- the only real proof anything landed.
+  try {
+    const verify = await browseContainerPaged(null, `SQ:${playlistId}`, 0, 50);
+    steps.push({
+      step: 'read back playlist contents',
+      ok: verify.items.length > 0,
+      trackCount: verify.items.length,
+      titles: verify.items.map((i) => i.title)
+    });
+  } catch (err) {
+    steps.push({ step: 'read back playlist contents', ok: false, error: err.message });
+  }
+
+  return { ok: true, playlistId, assignedObjectId, steps };
+}
+
+async function deleteProbePlaylist(playlistId) {
+  const device = devicesByName.values().next().value;
+  if (!device) return { ok: false };
+  const deleted = await device.deletePlaylist(playlistId);
+  return { ok: deleted };
+}
+
 function getMusicLibraryCategories() {
   return MUSIC_LIBRARY_CATEGORIES.map((c) => ({ ...c, browsable: true }));
 }
@@ -1878,6 +1973,8 @@ module.exports = {
   browseContainer,
   getContainerPage,
   getMusicLibraryCategories,
+  playlistWriteProbe,
+  deleteProbePlaylist,
   getCachedContainerItems,
   playItem,
   playPlaylistTrack,

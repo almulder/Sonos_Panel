@@ -339,6 +339,19 @@ app.get('/api/sonos/room/:room/browse-container', asyncHandler(async (req, res) 
   res.json({ items, total, start });
 }));
 
+// Throwaway diagnostic -- see playlistWriteProbe() in sonos.js. Not
+// linked from the UI; intended to be hit directly while working out
+// whether playlist writing is viable.
+app.post('/api/sonos/playlist-probe', asyncHandler(async (req, res) => {
+  const result = await sonos.playlistWriteProbe();
+  res.json(result);
+}));
+
+app.delete('/api/sonos/playlist-probe/:id', asyncHandler(async (req, res) => {
+  const result = await sonos.deleteProbePlaylist(req.params.id);
+  res.json(result);
+}));
+
 app.get('/api/sonos/room/:room/music-library', asyncHandler(async (req, res) => {
   res.json({ categories: sonos.getMusicLibraryCategories() });
 }));
