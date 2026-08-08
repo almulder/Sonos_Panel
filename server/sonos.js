@@ -279,6 +279,12 @@ function attachTopologyListener() {
   if (topologyListenerAttached) return;
   topologyListenerAttached = true;
   Listener.on('ZonesChanged', (zones) => {
+    // The library emits 'ZonesChanged' for every ZoneGroupTopology
+    // notification, not just ones that actually carry zone data (some
+    // are about other topology-related things entirely) -- guard
+    // against that rather than assuming zones is always a populated
+    // array.
+    if (!Array.isArray(zones) || zones.length === 0) return;
     try {
       const map = {};
       zones.forEach((zone) => {
