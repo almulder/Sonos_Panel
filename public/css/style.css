@@ -741,40 +741,45 @@ button {
 }
 
 .progress__icon {
+  display: block;
   width: 20px;
   height: 20px;
-  object-fit: contain;
-  /* Default = available-but-off: light grey. Disabled and active states
-     override this via the classes below. */
-  filter: brightness(0) invert(0.6);
-  transition: filter 0.15s ease;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  mask-position: center;
+  /* Default = available, not active: light grey. */
+  background-color: #8a8a8a;
+  transition: background-color 0.15s ease;
+}
+.progress__icon--shuffle {
+  -webkit-mask-image: url('icons/icon-shuffle.svg');
+  mask-image: url('icons/icon-shuffle.svg');
+}
+.progress__icon--crossfade {
+  -webkit-mask-image: url('icons/icon-crossfade.svg');
+  mask-image: url('icons/icon-crossfade.svg');
 }
 
-/* Shuffle: dark grey when unavailable (e.g. on a stream/favorite),
-   light grey when available -- matches the request to visually tell
-   the two states apart at a glance, independent of on/off. */
+/* Disabled (shuffle only, e.g. on a stream/favorite) -- almost black,
+   barely visible against the dark background. */
 .progress__shuffle.is-disabled .progress__icon {
-  filter: brightness(0) invert(0.25);
+  background-color: #262626;
 }
 .progress__shuffle.is-disabled {
   pointer-events: none;
 }
-/* Shuffle ON gets an amber tint, consistent with how every other
-   "active" indicator in the app (playing dot, active tab, focused
-   room) already uses amber. */
-.progress__shuffle.is-active .progress__icon {
-  filter: none;
-  -webkit-mask-image: url('icons/icon-shuffle.png');
-  mask-image: url('icons/icon-shuffle.png');
-  -webkit-mask-size: contain;
-  mask-size: contain;
-  background-color: var(--amber);
+
+/* Active (both shuffle and crossfade) -- white icon, white dot
+   underneath, matching how Sonos's own app indicates these. */
+.progress__shuffle.is-active .progress__icon,
+.progress__crossfade.is-active .progress__icon {
+  background-color: #ffffff;
 }
 
-/* Crossfade has no disabled state -- always the same light grey icon,
-   with a light grey dot appearing underneath when it's on, matching
-   how Sonos's own app indicates this. */
-.progress__crossfade-dot {
+.progress__dot {
   position: absolute;
   bottom: -2px;
   left: 50%;
@@ -782,13 +787,12 @@ button {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--text-dim);
-  opacity: 0;
-  transition: opacity 0.15s ease;
+  background: transparent;
+  transition: background-color 0.15s ease;
 }
-.progress__crossfade.is-active .progress__crossfade-dot {
-  opacity: 1;
-  background: #cfcfcf;
+.progress__shuffle.is-active .progress__dot,
+.progress__crossfade.is-active .progress__dot {
+  background: #ffffff;
 }
 
 /* ---------------------------------------------------------------------
