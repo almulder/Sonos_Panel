@@ -129,7 +129,8 @@ function buildSourceIcon(group) {
 const SonosView = (() => {
   const roomListEl = document.getElementById('roomList');
   const roomlistPanel = document.getElementById('sonosRoomlist');
-  const savedGroupsList = document.getElementById('savedGroupsList');
+  const roomlistLabel = document.getElementById('roomlistLabel');
+  const roomlistBackBtn = document.getElementById('roomlistBackBtn');
   const savedGroupsAddBtn = document.getElementById('savedGroupsAddBtn');
   const titleEl = document.getElementById('sonosTitle');
   const artistEl = document.getElementById('sonosArtist');
@@ -162,6 +163,8 @@ const SonosView = (() => {
   let focusedRoom = null;
   let pendingGroupSelection = new Set(); // top-level rooms checked, building toward a new/merged group
   let expandedCoordinators = new Set(); // coordinators currently showing their members
+  let showingGroupsPanel = false; // true = room list is showing saved groups instead of rooms
+  let savedGroupsCache = [];
   let currentlyPlaying = false;
   let sliderDragActive = false; // guards against a poll-triggered re-render wiping an in-progress volume drag
 
@@ -192,6 +195,14 @@ const SonosView = (() => {
     // and catch up once it ends.
     if (sliderDragActive) return;
 
+    if (showingGroupsPanel) {
+      renderGroupsPanel();
+      return;
+    }
+    roomlistLabel.textContent = 'ROOMS \u2014 check to group';
+    roomlistBackBtn.style.display = 'none';
+    savedGroupsAddBtn.style.display = 'none';
+
     // Size the name column to the widest room name actually present,
     // instead of letting it flex-stretch to fill all remaining width
     // (which was pushing the volume control all the way to the row's
@@ -200,6 +211,7 @@ const SonosView = (() => {
     roomListEl.style.setProperty('--name-col-width', `${Math.ceil(widest) + 28}px`);
 
     roomListEl.innerHTML = '';
+    roomListEl.appendChild(buildGroupsEntryRow());
     getTopLevelRooms().forEach((room) => {
       const members = getMembersOf(room.name);
       roomListEl.appendChild(buildCoordinatorRow(room, members));
@@ -459,59 +471,163 @@ const SonosView = (() => {
   // ---------------- Saved group presets ----------------
   // Local equivalent of the official Sonos app's "Saved Groups" (that
   // feature turned out to be cloud-account-only, not reachable from
-  // here). A saved group is just a name + list of room names -- tapping
-  // its chip fires the exact same /api/sonos/group call manual
-  // selection already uses.
+  // here). Shown as a "GROUPS" entry at the top of the room list --
+  // tapping it drills into the list of saved groups (replacing the room
+  // list content, same list element, with a back arrow to return).
+  // Tapping a saved group applies it (same /api/sonos/group call manual
+  // selection uses) and jumps back to the room list automatically.
 
   async function refreshSavedGroups() {
     const data = await api('/api/sonos/saved-groups');
-    renderSavedGroups(data.groups || []);
+    savedGroupsCache = data.groups || [];
+    if (showingGroupsPanel) render();
   }
 
-  function renderSavedGroups(groups) {
-    savedGroupsList.innerHTML = '';
-    groups.forEach((group) => {
-      const li = document.createElement('li');
-      li.className = 'savedgroups__chip';
+  function buildGroupsEntryRow() {
+    const li = document.createElement('li');
+    li.className = 'roomrow roomrow--groups-entry';
+    const main = document.createElement('div');
+    main.className = 'roomrow__main';
+    main.addEventListener('click', () => {
+      showingGroupsPanel = true;
+      render();
+    });
+    const nameLine = document.createElement('div');
+    nameLine.className = 'roomrow__nameline';
+    const name = document.createElement('span');
+    name.className = 'roomrow__name';
+    name.textContent = 'GROUPS';
+    nameLine.appendChild(name);
+    const chevron = document.createElement('span');
+    chevron.className = 'roomrow__chevron';
+    chevron.textContent = '\u25B8';
+    nameLine.appendChild(chevron);
+    main.appendChild(nameLine);
+    li.appendChild(main);
+    return li;
+  }
 
-      const applyBtn = document.createElement('button');
-      applyBtn.className = 'savedgroups__chipbtn';
-      applyBtn.textContent = group.name;
-      applyBtn.addEventListener('click', async () => {
-        await api('/api/sonos/group', {
+  function renderGroupsPanel() {
+    roomlistLabel.textContent = 'SAVED GROUPS';
+    roomlistBackBtn.style.display = '';
+    savedGroupsAddBtn.style.display = '';
+    roomListEl.innerHTML = '';
+
+    if (savedGroupsCache.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'roomlist__empty';
+      empty.textContent = 'No saved groups yet -- tap + to create one.';
+      roomListEl.appendChild(empty);
+      return;
+    }
+
+    savedGroupsCache.forEach((group) => {
+      const li = document.createElement('li');
+      li.className = 'roomrow roomrow--group';
+
+      const main = document.createElement('div');
+      main.className = 'roomrow__main';
+      main.addEventListener('click', async () => {
+        const result = await api('/api/sonos/group', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rooms: group.rooms })
         });
         expandedCoordinators.add(group.rooms[0]);
+        showingGroupsPanel = false;
         render();
+        if (result && result.failed && result.failed.length > 0) {
+          // Non-blocking heads-up rather than a hard error -- the rooms
+          // that WERE reachable still grouped fine, this just flags
+          // that one or more didn't join this time. The saved group
+          // itself is untouched, so it'll just work again once that
+          // room's back.
+          showRoomUnreachableNotice(result.failed);
+        }
       });
-      li.appendChild(applyBtn);
+      const nameLine = document.createElement('div');
+      nameLine.className = 'roomrow__nameline';
+      const name = document.createElement('span');
+      name.className = 'roomrow__name';
+      name.textContent = group.name;
+      nameLine.appendChild(name);
+      main.appendChild(nameLine);
+      const sub = document.createElement('div');
+      sub.className = 'roomrow__sublabel';
+      sub.textContent = group.rooms.join(', ');
+      main.appendChild(sub);
+      li.appendChild(main);
 
-      const delBtn = document.createElement('button');
-      delBtn.className = 'savedgroups__delbtn';
-      delBtn.textContent = '\u2715';
-      delBtn.setAttribute('aria-label', `Delete saved group ${group.name}`);
-      delBtn.addEventListener('click', async (e) => {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'roomrow__editbtn';
+      editBtn.setAttribute('aria-label', `Edit ${group.name}`);
+      editBtn.textContent = '\u270E';
+      editBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        await api(`/api/sonos/saved-groups/${encodeURIComponent(group.id)}`, { method: 'DELETE' });
-        await refreshSavedGroups();
+        openGroupModal(group);
       });
-      li.appendChild(delBtn);
+      li.appendChild(editBtn);
 
-      savedGroupsList.appendChild(li);
+      roomListEl.appendChild(li);
     });
   }
 
-  // Creation modal -- deliberately keyboard-optional. The name field is
-  // pre-filled with an auto-generated default built from whichever
-  // rooms are checked, kept in sync live as the selection changes,
-  // right up until the person actually types something themselves.
-  // This means the whole flow works with taps alone on a kiosk tablet
-  // where the on-screen keyboard may not reliably appear, while still
-  // allowing a custom name from a device with a real keyboard.
-  let saveGroupModalEl = null;
-  function buildSaveGroupModal() {
+  // Small non-blocking status line reusing the artist label's existing
+  // "temporary message" pattern (see the skip-track error handling
+  // elsewhere) rather than introducing a whole new toast system for
+  // one rare case.
+  function showRoomUnreachableNotice(failedRooms) {
+    const original = artistEl.textContent;
+    artistEl.textContent = `Couldn't reach: ${failedRooms.join(', ')}`;
+    setTimeout(() => { refreshNowPlaying(); }, 3000);
+  }
+
+  roomlistBackBtn.addEventListener('click', () => {
+    showingGroupsPanel = false;
+    render();
+  });
+
+  // Simple reusable yes/no confirm overlay -- built fresh each call
+  // rather than cached, since it's rare enough (deleting a saved group)
+  // that reuse isn't worth the extra bookkeeping.
+  function showConfirm(message, onYes) {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    const box = document.createElement('div');
+    box.className = 'confirm-box';
+    const msg = document.createElement('p');
+    msg.className = 'confirm-message';
+    msg.textContent = message;
+    box.appendChild(msg);
+    const btnRow = document.createElement('div');
+    btnRow.className = 'confirm-buttons';
+    const noBtn = document.createElement('button');
+    noBtn.className = 'confirm-btn confirm-btn--no';
+    noBtn.textContent = 'No';
+    noBtn.addEventListener('click', () => document.body.removeChild(overlay));
+    const yesBtn = document.createElement('button');
+    yesBtn.className = 'confirm-btn confirm-btn--yes';
+    yesBtn.textContent = 'Yes';
+    yesBtn.addEventListener('click', () => {
+      document.body.removeChild(overlay);
+      onYes();
+    });
+    btnRow.appendChild(noBtn);
+    btnRow.appendChild(yesBtn);
+    box.appendChild(btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+  }
+
+  // Creation/edit modal -- one shared implementation for both, since
+  // they're the same form (name + room checklist) with edit adding a
+  // pre-filled state and a delete option. Deliberately keyboard-
+  // optional: the name field auto-fills from whichever rooms are
+  // checked, live, right up until the person actually types something
+  // themselves -- the whole flow works with taps alone on a kiosk
+  // tablet where the on-screen keyboard may not reliably appear.
+  let groupModalEl = null;
+  function buildGroupModal() {
     const overlay = document.createElement('div');
     overlay.className = 'roomsettings-overlay';
     overlay.addEventListener('click', (e) => {
@@ -525,7 +641,6 @@ const SonosView = (() => {
     header.className = 'roomsettings-sheet__header';
     const title = document.createElement('h3');
     title.className = 'roomsettings-sheet__title';
-    title.textContent = 'Save a Group';
     const closeBtn = document.createElement('button');
     closeBtn.className = 'roomsettings-sheet__close';
     closeBtn.textContent = '\u2715';
@@ -551,21 +666,29 @@ const SonosView = (() => {
 
     const saveBtn = document.createElement('button');
     saveBtn.className = 'savegroup-savebtn';
-    saveBtn.textContent = 'Save Group';
     sheet.appendChild(saveBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'savegroup-deletebtn';
+    deleteBtn.innerHTML = '\u{1F5D1}\uFE0F Delete Group';
+    sheet.appendChild(deleteBtn);
 
     overlay.appendChild(sheet);
     document.body.appendChild(overlay);
-    return { overlay, checklist, nameInput, saveBtn };
+    return { overlay, title, checklist, nameInput, saveBtn, deleteBtn };
   }
 
-  function openSaveGroupModal() {
-    if (!saveGroupModalEl) saveGroupModalEl = buildSaveGroupModal();
-    const { overlay, checklist, nameInput, saveBtn } = saveGroupModalEl;
+  function openGroupModal(existingGroup) {
+    if (!groupModalEl) groupModalEl = buildGroupModal();
+    const { overlay, title, checklist, nameInput, saveBtn, deleteBtn } = groupModalEl;
+    const isEdit = !!existingGroup;
+    title.textContent = isEdit ? 'Edit Group' : 'Save a Group';
+    saveBtn.textContent = isEdit ? 'Save Changes' : 'Save Group';
+    deleteBtn.style.display = isEdit ? '' : 'none';
     overlay.style.display = 'flex';
 
-    let nameEditedByUser = false;
-    nameInput.value = '';
+    let nameEditedByUser = isEdit; // don't clobber an existing custom name
+    nameInput.value = existingGroup ? existingGroup.name : '';
     nameInput.oninput = () => { nameEditedByUser = true; };
 
     function selectedRooms() {
@@ -576,19 +699,36 @@ const SonosView = (() => {
       nameInput.value = selectedRooms().join(' + ');
     }
 
+    // Every room ever discovered, not just current top-level ones --
+    // plus, for editing, any room the saved group remembers that isn't
+    // in the live list at all right now (never rediscovered since
+    // startup). Currently-known-unreachable rooms (reachable === false)
+    // and unknown-to-this-session ones both show clearly marked rather
+    // than silently mixed in with normal rooms -- a saved group should
+    // stay editable even with a room currently offline, in case you
+    // want to remove it permanently rather than wait for it to
+    // reconnect.
     checklist.innerHTML = '';
-    // Every room, not just current top-level ones -- a saved group
-    // should be selectable regardless of whatever grouping happens to
-    // be active right now.
-    rooms.forEach((room) => {
+    const liveNames = new Set(rooms.map((r) => r.name));
+    const extraOfflineNames = existingGroup
+      ? existingGroup.rooms.filter((n) => !liveNames.has(n))
+      : [];
+    const allEntries = [
+      ...rooms.map((r) => ({ name: r.name, disconnected: r.reachable === false })),
+      ...extraOfflineNames.map((n) => ({ name: n, disconnected: true }))
+    ];
+
+    allEntries.forEach((entry) => {
       const row = document.createElement('label');
       row.className = 'savegroup-checkrow';
+      if (entry.disconnected) row.classList.add('is-disconnected');
       const cb = document.createElement('input');
       cb.type = 'checkbox';
-      cb.value = room.name;
+      cb.value = entry.name;
+      if (existingGroup && existingGroup.rooms.includes(entry.name)) cb.checked = true;
       cb.addEventListener('change', updateDefaultName);
       const span = document.createElement('span');
-      span.textContent = room.name;
+      span.textContent = entry.disconnected ? `${entry.name} (disconnected)` : entry.name;
       row.appendChild(cb);
       row.appendChild(span);
       checklist.appendChild(row);
@@ -597,17 +737,35 @@ const SonosView = (() => {
     saveBtn.onclick = async () => {
       const selected = selectedRooms();
       if (selected.length < 2) return;
-      await api('/api/sonos/saved-groups', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: nameInput.value, rooms: selected })
-      });
+      const body = JSON.stringify({ name: nameInput.value, rooms: selected });
+      if (isEdit) {
+        await api(`/api/sonos/saved-groups/${encodeURIComponent(existingGroup.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body
+        });
+      } else {
+        await api('/api/sonos/saved-groups', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body
+        });
+      }
       overlay.style.display = 'none';
       await refreshSavedGroups();
     };
+
+    deleteBtn.onclick = () => {
+      showConfirm(`Delete "${existingGroup.name}"?`, async () => {
+        await api(`/api/sonos/saved-groups/${encodeURIComponent(existingGroup.id)}`, { method: 'DELETE' });
+        overlay.style.display = 'none';
+        await refreshSavedGroups();
+      });
+    };
   }
 
-  savedGroupsAddBtn.addEventListener('click', openSaveGroupModal);
+  savedGroupsAddBtn.addEventListener('click', () => openGroupModal(null));
+
 
   // Per-room sound settings sheet (bass/treble/loudness) -- built once
   // and reused/repopulated on each open rather than recreated every

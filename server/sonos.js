@@ -89,6 +89,15 @@ function addSavedGroup(name, roomNames) {
 function deleteSavedGroup(id) {
   writeSavedGroups(loadSavedGroups().filter((g) => g.id !== id));
 }
+function updateSavedGroup(id, name, roomNames) {
+  const groups = loadSavedGroups();
+  const group = groups.find((g) => g.id === id);
+  if (!group) return null;
+  group.name = (name || '').trim() || roomNames.join(' + ');
+  group.rooms = roomNames;
+  writeSavedGroups(groups);
+  return group;
+}
 
 let usingMock = true;
 let devicesByName = new Map();
@@ -135,10 +144,10 @@ function onGroupVolumeChanged(callback) {
 function buildMockState() {
   return {
     rooms: [
-      { name: 'Living Room', volume: 34, playing: true, muted: false, coordinator: 'Living Room' },
-      { name: 'Kitchen', volume: 28, playing: true, muted: false, coordinator: 'Living Room' },
-      { name: 'Patio', volume: 45, playing: false, muted: false, coordinator: 'Patio' },
-      { name: 'Office', volume: 20, playing: false, muted: false, coordinator: 'Office' }
+      { name: 'Living Room', volume: 34, playing: true, muted: false, reachable: true, coordinator: 'Living Room' },
+      { name: 'Kitchen', volume: 28, playing: true, muted: false, reachable: true, coordinator: 'Living Room' },
+      { name: 'Patio', volume: 45, playing: false, muted: false, reachable: true, coordinator: 'Patio' },
+      { name: 'Office', volume: 20, playing: false, muted: false, reachable: true, coordinator: 'Office' }
     ],
     nowPlaying: {
       'Living Room': {
@@ -305,7 +314,7 @@ function attachDeviceEventListeners(name, device) {
   device.on('PlayState', (state) => {
     try {
       const playing = state === 'playing';
-      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, coordinator: name };
+      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, reachable: true, coordinator: name };
       lastRoomsByName.set(name, { ...existing, playing });
       notifyLiveUpdate();
     } catch (err) {
@@ -315,7 +324,7 @@ function attachDeviceEventListeners(name, device) {
 
   device.on('Volume', (volume) => {
     try {
-      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, coordinator: name };
+      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, reachable: true, coordinator: name };
       lastRoomsByName.set(name, { ...existing, volume });
       notifyLiveUpdate();
     } catch (err) {
@@ -325,7 +334,7 @@ function attachDeviceEventListeners(name, device) {
 
   device.on('Muted', (muted) => {
     try {
-      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, coordinator: name };
+      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, reachable: true, coordinator: name };
       lastRoomsByName.set(name, { ...existing, muted });
       notifyLiveUpdate();
     } catch (err) {
@@ -488,10 +497,12 @@ async function getRooms() {
         let volume = 0;
         let playing = false;
         let muted = false;
+        let reachable = true;
         try {
           volume = await device.getVolume();
         } catch (err) {
           debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
+          reachable = false;
         }
         try {
           const state = await device.getCurrentState();
@@ -504,7 +515,7 @@ async function getRooms() {
         } catch (err) {
           debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
         }
-        return { name, volume, playing, muted, coordinator: coordinatorMap[name] || name };
+        return { name, volume, playing, muted, reachable, coordinator: coordinatorMap[name] || name };
       })
     );
     rooms.sort((a, b) => a.name.localeCompare(b.name));
@@ -540,10 +551,12 @@ async function getRoomsTargeted(targetRoomNames) {
           let volume = 0;
           let playing = false;
           let muted = false;
+          let reachable = true;
           try {
             volume = await device.getVolume();
           } catch (err) {
             debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
+            reachable = false;
           }
           try {
             const state = await device.getCurrentState();
@@ -557,7 +570,7 @@ async function getRoomsTargeted(targetRoomNames) {
             debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
           }
           const coordinator = lastCoordinatorMap[name] || name;
-          return { name, volume, playing, muted, coordinator };
+          return { name, volume, playing, muted, reachable, coordinator };
         })
     );
 
@@ -962,31 +975,45 @@ async function setLoudness(roomName, enabled) {
 }
 
 async function groupRooms(roomNames) {
-  if (!roomNames || roomNames.length < 2) return;
+  if (!roomNames || roomNames.length < 2) return { succeeded: [], failed: [] };
   if (usingMock) {
     const [coordinatorName, ...members] = roomNames;
     members.forEach((name) => {
       const room = mockState.rooms.find((r) => r.name === name);
       if (room) room.coordinator = coordinatorName;
     });
-    return;
+    return { succeeded: members, failed: [] };
   }
   const [coordinatorName, ...members] = roomNames;
-  // Parallel, not sequential: each member's joinGroup() is an independent
-  // call to that member's own device (pointing its AVTransportURI at the
-  // coordinator), not a shared write on the coordinator itself, so
-  // there's no real conflict in firing them all at once. Awaiting them
-  // one at a time in a loop was adding each member's full round-trip
-  // time on top of the last -- 3 members joining sequentially could take
-  // 3x as long as necessary before any of them even start actually
-  // syncing, even before accounting for Sonos's own settling time.
-  await Promise.all(
+  // Promise.allSettled, not Promise.all: a saved group with one
+  // unreachable room (unplugged, rebooting, Wi-Fi hiccup) shouldn't
+  // block the OTHER rooms from grouping. Promise.all fails fast on the
+  // first rejection and would abort the whole batch even though most
+  // of the rooms might have joined fine. This reports back exactly
+  // which rooms actually joined vs which didn't, so the caller can
+  // reflect reality accurately rather than an all-or-nothing result.
+  //
+  // Deliberately does NOT modify any stored saved-group definition on
+  // failure -- a room that's temporarily unreachable should still be
+  // part of the group next time, once it's back. Skipping it here is
+  // purely for this one attempt, not a permanent removal.
+  const results = await Promise.allSettled(
     members.map((memberName) => {
       const member = findDevice(memberName);
-      if (!member) return Promise.resolve();
+      if (!member) return Promise.reject(new Error(`${memberName} not found`));
       return guarded(`groupRooms(${memberName} -> ${coordinatorName})`, () => member.joinGroup(coordinatorName));
     })
   );
+  const succeeded = [];
+  const failed = [];
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') succeeded.push(members[i]);
+    else {
+      failed.push(members[i]);
+      debugLog.warn('sonos', `groupRooms: ${members[i]} did not join -- ${result.reason && result.reason.message}`);
+    }
+  });
+  return { succeeded, failed };
 }
 
 // Immediately reflects an intended topology change in the cache, ahead
@@ -1567,6 +1594,7 @@ module.exports = {
   getSavedGroups,
   addSavedGroup,
   deleteSavedGroup,
+  updateSavedGroup,
   getLastKnownRooms,
   onLiveUpdate,
   onNowPlayingChanged,

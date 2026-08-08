@@ -91,13 +91,14 @@
 
           <div class="lowerpanels">
             <div class="roomlist" id="sonosRoomlist">
-              <div class="savedgroups" id="savedGroupsRow">
-                <ul class="savedgroups__list" id="savedGroupsList"></ul>
-                <button class="savedgroups__add" id="savedGroupsAddBtn" aria-label="Save a new group">+</button>
+              <div class="roomlist__header">
+                <button class="roomlist__back" id="roomlistBackBtn" style="display: none;" aria-label="Back to rooms">&#8592;</button>
+                <p class="roomlist__label" id="roomlistLabel">ROOMS &mdash; check to group</p>
+                <button class="roomlist__addgroup" id="savedGroupsAddBtn" style="display: none;" aria-label="Save a new group">+</button>
               </div>
-              <p class="roomlist__label">ROOMS &mdash; check to group</p>
               <ul class="roomlist__items" id="roomList"></ul>
             </div>
+
 
             <div class="sourcepanel" id="sourcePanel">
               <div class="sourcepanel__header">

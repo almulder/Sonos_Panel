@@ -237,11 +237,13 @@ app.post('/api/sonos/room/:room/group-mute', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/sonos/group', asyncHandler(async (req, res) => {
-  await sonos.groupRooms(req.body.rooms);
   const [coordinatorName] = req.body.rooms;
+  const { succeeded, failed } = await sonos.groupRooms(req.body.rooms);
   // Reflect the intended grouping immediately, rather than waiting on
   // Sonos's own join-settling time (which can genuinely take several
-  // seconds) before the UI shows anything.
+  // seconds) before the UI shows anything. Only the rooms that actually
+  // joined get patched -- a room that failed (unplugged, unreachable)
+  // shouldn't show as grouped when it isn't really.
   //
   // Deliberately NOT triggering a fast-poll burst here anymore: a burst
   // would re-check real topology every 500ms for the next 5 seconds,
@@ -253,9 +255,11 @@ app.post('/api/sonos/group', asyncHandler(async (req, res) => {
   // now delivers genuine confirmation the moment Sonos actually
   // finishes, with the slow 15s baseline poll as an ultimate fallback
   // if that event is ever missed.
-  sonos.patchCoordinatorOptimistically(req.body.rooms, coordinatorName);
-  if (broadcastNow) broadcastNow();
-  res.json({ ok: true });
+  if (succeeded.length > 0) {
+    sonos.patchCoordinatorOptimistically([coordinatorName, ...succeeded], coordinatorName);
+    if (broadcastNow) broadcastNow();
+  }
+  res.json({ ok: true, succeeded, failed });
 }));
 
 app.post('/api/sonos/room/:room/ungroup', asyncHandler(async (req, res) => {
@@ -289,6 +293,16 @@ app.post('/api/sonos/saved-groups', asyncHandler(async (req, res) => {
 app.delete('/api/sonos/saved-groups/:id', asyncHandler(async (req, res) => {
   sonos.deleteSavedGroup(req.params.id);
   res.json({ ok: true });
+}));
+
+app.put('/api/sonos/saved-groups/:id', asyncHandler(async (req, res) => {
+  const { name, rooms } = req.body;
+  if (!Array.isArray(rooms) || rooms.length < 2) {
+    return res.status(400).json({ error: 'A saved group needs at least 2 rooms' });
+  }
+  const group = sonos.updateSavedGroup(req.params.id, name, rooms);
+  if (!group) return res.status(404).json({ error: 'Saved group not found' });
+  res.json({ group });
 }));
 
 app.get('/api/sonos/room/:room/source-groups', asyncHandler(async (req, res) => {

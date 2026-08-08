@@ -286,60 +286,32 @@ button {
 }
 
 /* ---------------------------------------------------------------------
-   Saved group presets -- local equivalent of the official app's
-   "Saved Groups", shown as a row of tappable chips above the room list.
+   Room list header -- normally just the "ROOMS" label, but switches to
+   a back arrow + "SAVED GROUPS" label + add button when drilled into
+   the groups panel (same list element, different content).
 --------------------------------------------------------------------- */
-.savedgroups {
+.roomlist__header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 4px 12px;
-  flex-wrap: wrap;
+  margin: 0 4px 10px;
 }
-
-.savedgroups__list {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  list-style: none;
+.roomlist__header .roomlist__label {
   margin: 0;
-  padding: 0;
+  flex: 1;
 }
-
-.savedgroups__chip {
-  display: flex;
-  align-items: stretch;
-  background: var(--panel-raised);
-  border-radius: 16px;
-  overflow: hidden;
-}
-
-.savedgroups__chipbtn {
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-family: var(--font-label);
-  font-size: 12px;
-  padding: 8px 10px;
-  min-height: var(--touch-min);
-}
-
-.savedgroups__delbtn {
+.roomlist__back {
   border: none;
   background: transparent;
   color: var(--text-dim);
-  font-size: 10px;
-  padding: 8px 8px;
-  min-height: var(--touch-min);
+  font-size: 16px;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
 }
-.savedgroups__delbtn:hover,
-.savedgroups__delbtn:focus {
-  color: var(--text);
-}
-
-.savedgroups__add {
-  width: 32px;
-  height: 32px;
+.roomlist__addgroup {
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: 1px dashed var(--divider);
   background: transparent;
@@ -348,8 +320,39 @@ button {
   flex-shrink: 0;
 }
 
-/* Save-group modal checklist (reuses .roomsettings-overlay/-sheet from
-   the per-room settings sheet for the modal chrome itself) */
+.roomlist__empty {
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 13px;
+  padding: 20px 8px;
+  text-align: center;
+}
+
+/* The "GROUPS" entry row sits above the normal rooms, same visual
+   weight as a room row so it reads as part of the same list. */
+.roomrow--groups-entry {
+  border-bottom: 1px solid var(--divider);
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+}
+
+.roomrow--group .roomrow__editbtn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+.roomrow--group .roomrow__editbtn:hover,
+.roomrow--group .roomrow__editbtn:focus {
+  color: var(--text);
+}
+
+/* Save/edit-group modal checklist (reuses .roomsettings-overlay/-sheet
+   from the per-room settings sheet for the modal chrome itself) */
 .savegroup-checklist {
   max-height: 240px;
   overflow-y: auto;
@@ -364,6 +367,10 @@ button {
   font-size: 14px;
   color: var(--text);
   border-bottom: 1px solid var(--divider);
+}
+.savegroup-checkrow.is-disconnected {
+  color: var(--text-dim);
+  font-style: italic;
 }
 .savegroup-checkrow input[type="checkbox"] {
   width: 20px;
@@ -392,6 +399,66 @@ button {
   font-family: var(--font-label);
   font-weight: 700;
   font-size: 14px;
+}
+.savegroup-deletebtn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: #e0685c;
+  font-family: var(--font-label);
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------------
+   Generic yes/no confirm overlay (currently just used for deleting a
+   saved group)
+--------------------------------------------------------------------- */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.confirm-box {
+  background: var(--panel-raised);
+  border-radius: 14px;
+  padding: 24px;
+  max-width: 320px;
+  width: 90%;
+}
+.confirm-message {
+  color: var(--text);
+  font-family: var(--font-label);
+  font-size: 15px;
+  margin: 0 0 20px;
+  text-align: center;
+}
+.confirm-buttons {
+  display: flex;
+  gap: 10px;
+}
+.confirm-btn {
+  flex: 1;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 14px;
+}
+.confirm-btn--no {
+  background: var(--panel);
+  color: var(--text);
+}
+.confirm-btn--yes {
+  background: #e0685c;
+  color: #14181a;
 }
 
 .roomlist__items {
