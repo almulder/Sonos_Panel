@@ -582,11 +582,13 @@ async function getRooms() {
           playing = state === 'playing';
         } catch (err) {
           debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
+          reachable = false;
         }
         try {
           muted = await withTimeout(device.getMuted(), DEVICE_CALL_TIMEOUT_MS, `getMuted(${name})`);
         } catch (err) {
           debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
+          reachable = false;
         }
         return { name, volume, playing, muted, reachable, coordinator: coordinatorMap[name] || name };
       })
@@ -637,11 +639,13 @@ async function getRoomsTargeted(targetRoomNames) {
             playing = state === 'playing';
           } catch (err) {
             debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
+            reachable = false;
           }
           try {
             muted = await withTimeout(device.getMuted(), DEVICE_CALL_TIMEOUT_MS, `getMuted(${name})`);
           } catch (err) {
             debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
+            reachable = false;
           }
           const coordinator = lastCoordinatorMap[name] || name;
           return { name, volume, playing, muted, reachable, coordinator };
