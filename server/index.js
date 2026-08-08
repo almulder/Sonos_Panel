@@ -43,7 +43,16 @@ function buildExtraTabs() {
   return tabs;
 }
 
-const POLL_INTERVAL_MS = 2000;
+// Now a SAFETY-NET cadence rather than the primary update mechanism --
+// see sonos.js's attachDeviceEventListeners/attachTopologyListener for
+// the real-time push updates that handle the common case instantly.
+// This still runs regularly specifically because that push path has a
+// known gap (documented in sonos.js): if a UPnP subscription's renewal
+// fails for certain reasons, the library stops retrying it silently,
+// with no self-healing. 15s means a dead subscription is caught and
+// corrected reasonably quickly rather than a room silently going stale
+// until a manual restart.
+const POLL_INTERVAL_MS = 15000;
 // Tightened from 500ms now that a burst only re-queries the room(s)
 // actually involved (see triggerSonosFastPoll) instead of every device --
 // the risk with a fast interval was always about how many speakers get
@@ -339,6 +348,13 @@ async function main() {
       if (client.readyState === client.OPEN) client.send(msg);
     });
   }
+
+  // Real-time push updates from sonos.js (PlayState/Volume/topology
+  // events) call this the instant something changes, independent of
+  // the poll loop below.
+  sonos.onLiveUpdate((rooms) => {
+    broadcast({ type: 'sonos:rooms', rooms });
+  });
 
   // Lets route handlers (see the optimistic patch in /api/sonos/group
   // and .../ungroup) push the current cached room list immediately,

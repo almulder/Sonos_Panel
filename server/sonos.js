@@ -29,7 +29,7 @@
 // which is a separate integration (registered developer app + OAuth).
 // See the note above getSourceCategories() for the full story.
 
-const { Sonos, AsyncDeviceDiscovery, Helpers, Services } = require('sonos');
+const { Sonos, AsyncDeviceDiscovery, Helpers, Services, Listener } = require('sonos');
 const axios = require('axios');
 const path = require('path');
 const debugLog = require('./debugLog');
@@ -63,6 +63,18 @@ let mockState = buildMockState();
 // everyone else's entry is just whatever the last full poll saw.
 let lastRoomsByName = new Map();
 let lastCoordinatorMap = {};
+
+// Real-time push updates (see attachDeviceEventListeners/attachTopologyListener
+// below) call this instead of waiting for the next poll tick to notice a
+// change. index.js registers a callback here once at boot that broadcasts
+// straight to connected clients.
+let liveUpdateCallback = null;
+function onLiveUpdate(callback) {
+  liveUpdateCallback = callback;
+}
+function notifyLiveUpdate() {
+  if (liveUpdateCallback) liveUpdateCallback(getLastKnownRooms());
+}
 
 function buildMockState() {
   return {
@@ -181,6 +193,16 @@ async function init() {
     usingMock = false;
     debugLog.info('sonos', `Found ${devicesByName.size} S2 device(s) via merged topology: ${[...devicesByName.keys()].join(', ')}`);
 
+    // Real-time push updates for play state, volume, and topology --
+    // see the comment above attachDeviceEventListeners for the full
+    // reasoning. Attaching the first device's listener also triggers
+    // the library's global ZoneGroupTopology subscription automatically.
+    devicesByName.forEach((device, key) => {
+      const name = displayNameByKey.get(key) || key;
+      attachDeviceEventListeners(name, device);
+    });
+    attachTopologyListener();
+
     // Warm the Favorites and Playlists caches in the background so the
     // first real visit to Sources doesn't eat a fresh-fetch delay --
     // fire-and-forget, doesn't block startup or affect the
@@ -202,6 +224,88 @@ async function init() {
 
 function findDevice(roomName) {
   return devicesByName.get((roomName || '').toLowerCase()) || null;
+}
+
+// Real-time updates, in addition to (not instead of) the polling below --
+// see the big comment block above SONOS_FAST_POLL_BURST_MS-equivalent
+// constants in index.js for the full reasoning. Short version: the
+// `sonos` npm package already maintains its own UPnP event subscriptions
+// per device once you attach a listener (it auto-subscribes on first
+// .on() call, and auto-renews every 25 min internally) -- attaching to
+// PlayState/Volume gets push notifications the instant a speaker's own
+// state changes, no polling interval to tune at all for those two. This
+// updates the cache directly from the event payload (no extra network
+// call needed, unlike a poll) and pushes it out immediately.
+//
+// Known gap, from reading the library's own source: if a subscription
+// renewal fails for any reason other than one specific network error
+// code, the library stops retrying that device's renewal permanently,
+// with no automatic recovery. That's exactly why polling stays in place
+// as a safety net (see POLL_INTERVAL_MS in index.js) rather than this
+// being the only source of truth -- a silently-dead subscription would
+// otherwise mean that room's live updates just stop forever until a
+// restart, with nothing to notice or self-heal it.
+function attachDeviceEventListeners(name, device) {
+  device.on('PlayState', (state) => {
+    try {
+      const playing = state === 'playing';
+      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, coordinator: name };
+      lastRoomsByName.set(name, { ...existing, playing });
+      notifyLiveUpdate();
+    } catch (err) {
+      debugLog.warn('sonos', `Error handling PlayState event for ${name}: ${err.message}`);
+    }
+  });
+
+  device.on('Volume', (volume) => {
+    try {
+      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, coordinator: name };
+      lastRoomsByName.set(name, { ...existing, volume });
+      notifyLiveUpdate();
+    } catch (err) {
+      debugLog.warn('sonos', `Error handling Volume event for ${name}: ${err.message}`);
+    }
+  });
+}
+
+// Attached once, globally -- not per-device. The library subscribes to
+// the household-wide ZoneGroupTopology service automatically the first
+// time ANY device gets a .on() call (see attachDeviceEventListeners),
+// so this doesn't need its own separate subscription step, just a
+// listener for the event it produces.
+let topologyListenerAttached = false;
+function attachTopologyListener() {
+  if (topologyListenerAttached) return;
+  topologyListenerAttached = true;
+  Listener.on('ZonesChanged', (zones) => {
+    try {
+      const map = {};
+      zones.forEach((zone) => {
+        // zone.Name has a "+N" suffix for multi-member groups (e.g.
+        // "Living Room + 2") -- not usable as the coordinator's actual
+        // room name, which is what the rest of this app compares
+        // against. Resolve the real name via matching the coordinator's
+        // host/port against the member list instead.
+        const coordinatorMember = zone.Members.find(
+          (m) => m.host === zone.Coordinator.host && String(m.port) === String(zone.Coordinator.port)
+        );
+        const coordinatorName = coordinatorMember ? coordinatorMember.name : null;
+        if (!coordinatorName) return;
+        zone.Members.forEach((member) => {
+          map[member.name] = coordinatorName;
+        });
+      });
+      if (Object.keys(map).length === 0) return;
+
+      lastCoordinatorMap = map;
+      lastRoomsByName.forEach((room, name) => {
+        if (map[name]) lastRoomsByName.set(name, { ...room, coordinator: map[name] });
+      });
+      notifyLiveUpdate();
+    } catch (err) {
+      debugLog.warn('sonos', `Error handling ZonesChanged event: ${err.message}`);
+    }
+  });
 }
 
 async function guarded(actionLabel, fn) {
@@ -1186,6 +1290,7 @@ module.exports = {
   getGroupMemberNames,
   patchCoordinatorOptimistically,
   getLastKnownRooms,
+  onLiveUpdate,
   getNowPlaying,
   play,
   pause,

@@ -149,18 +149,24 @@ multi-second fetch delay. Album art is also prefetched into the
 browser's cache in the background per source group, independently, so
 one slow/failing group can't block the others from loading.
 
-**Polling:** room state polls every 2 seconds normally. Any playback,
-volume, or grouping action triggers a 5-second burst of faster (150ms)
-polling right after, so changes visibly catch up quickly. The burst is
-scoped to just the room(s) actually involved (or the whole bonded
-group, for a group-volume/group-mute action) rather than re-polling
-every speaker at the faster rate -- a single-room volume tweak on a
-9-room system only re-queries that one device, regardless of the
-faster interval, which is what makes a short interval safe rather than
-risking overloading the hardware. Grouping/ungrouping is the one
-exception: since it changes the topology itself (which can affect how
-other rooms display their group label), that burst does a full,
-untargeted poll instead.
+**Real-time updates:** playback state, volume, and group topology all
+push live updates via Sonos's own UPnP eventing (the `sonos` npm
+package auto-subscribes once a listener is attached) rather than
+relying on polling to notice changes -- a speaker reports a volume
+change or a group join the instant it happens, no interval to tune.
+
+Polling still runs underneath this, but as a safety net rather than
+the primary mechanism: a slow 15-second background poll catches
+anything an event might have missed (the underlying library's
+subscription renewal isn't fully self-healing if it fails for an
+unusual reason), and any playback/volume/grouping action still
+triggers a brief 5-second burst of faster (150ms) polling right after,
+scoped to just the room(s) actually involved so it doesn't add load to
+speakers that aren't part of the action. Grouping/ungrouping also gets
+an immediate optimistic update (the UI reflects the intended change
+right away, corrected by the following poll/event if reality differs)
+since Sonos's own group-join settling time can genuinely take a few
+seconds regardless of how fast anything here polls.
 
 ## Contributing
 
