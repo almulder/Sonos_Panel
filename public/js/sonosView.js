@@ -174,6 +174,13 @@ const SonosView = (() => {
     return res.json();
   }
 
+  function withClientTimeout(promise, ms) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), ms))
+    ]);
+  }
+
   function getTopLevelRooms() {
     return rooms.filter((r) => r.coordinator === r.name);
   }
@@ -491,23 +498,47 @@ const SonosView = (() => {
     roomListEl.addEventListener('touchmove', (e) => {
       if (startY === null) return;
       const delta = e.touches[0].clientY - startY;
+      const wasPulling = pulling;
       pulling = delta > THRESHOLD && roomListEl.scrollTop <= 0;
+      // Progressive feedback DURING the drag, not just after release --
+      // otherwise there's no way to tell the gesture even registered
+      // until you lift your finger.
+      if (delta > 15 && roomListEl.scrollTop <= 0) {
+        roomlistPullIndicator.classList.add('is-active');
+        roomlistPullIndicator.textContent = pulling ? 'Release to refresh' : 'Pull to refresh';
+      } else if (!wasPulling) {
+        roomlistPullIndicator.classList.remove('is-active');
+      }
     }, { passive: true });
 
     roomListEl.addEventListener('touchend', async () => {
       if (pulling) {
         pulling = false;
+        roomlistPullIndicator.textContent = 'Refreshing\u2026';
         roomlistPullIndicator.classList.add('is-active');
         try {
-          if (showingGroupsPanel) {
-            await refreshRooms();
-            await refreshSavedGroups();
-          } else {
-            await refreshRooms();
-          }
+          // Client-side safety net on top of the server-side timeout
+          // fix -- if anything ever hangs regardless, this guarantees
+          // the indicator doesn't get stuck forever.
+          await withClientTimeout(
+            (async () => {
+              if (showingGroupsPanel) {
+                await refreshRooms();
+                await refreshSavedGroups();
+              } else {
+                await refreshRooms();
+              }
+            })(),
+            8000
+          );
+        } catch (err) {
+          // Swallow -- a failed/timed-out manual refresh just means
+          // try again, not worth surfacing an error for.
         } finally {
           roomlistPullIndicator.classList.remove('is-active');
         }
+      } else {
+        roomlistPullIndicator.classList.remove('is-active');
       }
       startY = null;
     }, { passive: true });
@@ -728,7 +759,7 @@ const SonosView = (() => {
     return { overlay, title, checklist, nameInput, saveBtn, deleteBtn };
   }
 
-  function openGroupModal(existingGroup) {
+  async function openGroupModal(existingGroup) {
     if (!groupModalEl) groupModalEl = buildGroupModal();
     const { overlay, title, checklist, nameInput, saveBtn, deleteBtn } = groupModalEl;
     const isEdit = !!existingGroup;
@@ -736,6 +767,18 @@ const SonosView = (() => {
     saveBtn.textContent = isEdit ? 'Save Changes' : 'Save Group';
     deleteBtn.style.display = isEdit ? '' : 'none';
     overlay.style.display = 'flex';
+
+    // Fresh reachability check right as the modal opens, rather than
+    // trusting whatever the last poll happened to leave cached --
+    // creating/editing a group is exactly when accurate "is this room
+    // actually here right now" data matters most.
+    checklist.innerHTML = '<div class="savegroup-checking">Checking rooms\u2026</div>';
+    try {
+      await withClientTimeout(refreshRooms(), 8000);
+    } catch (err) {
+      // If this somehow still times out, fall back to whatever's
+      // already cached rather than leaving the modal stuck.
+    }
 
     let nameEditedByUser = isEdit; // don't clobber an existing custom name
     nameInput.value = existingGroup ? existingGroup.name : '';

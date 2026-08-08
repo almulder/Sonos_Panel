@@ -431,20 +431,56 @@ async function guarded(actionLabel, fn) {
   }
 }
 
+// A genuinely unplugged/unreachable device doesn't reject a connection
+// attempt quickly -- it just never responds, and without an explicit
+// timeout the underlying TCP/HTTP call can hang for a very long time
+// (OS-level default timeouts are commonly 60+ seconds, sometimes much
+// longer) before ever throwing. Since the poll loop wraps every
+// device's checks in Promise.all(), which only resolves once EVERY
+// promise settles, one hung device was blocking the ENTIRE poll from
+// ever completing -- explaining why the room list stopped updating
+// (even a full page reload hangs on the same request) and why
+// ungrouping a disconnected room got stuck (leaveGroup() on that same
+// dead device hung forever, so the catch that was supposed to handle
+// it never got a chance to run at all). This wraps any device call in
+// a race against a short timeout so a dead device fails fast and
+// predictably instead.
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    })
+  ]);
+}
+const DEVICE_CALL_TIMEOUT_MS = 3000;
+
 async function getCoordinatorMap() {
-  const anyDevice = devicesByName.values().next().value;
-  if (!anyDevice) return {};
-  const groups = await anyDevice.getAllGroups();
-  const map = {};
-  groups.forEach((zone) => {
-    const coordinatorMember = zone.ZoneGroupMember.find((m) => m.UUID === zone.Coordinator);
-    const coordinatorName = coordinatorMember ? coordinatorMember.ZoneName : null;
-    zone.ZoneGroupMember.forEach((member) => {
-      map[member.ZoneName] = coordinatorName || member.ZoneName;
-    });
-  });
-  lastCoordinatorMap = map;
-  return map;
+  // Tries every device in turn (not just the first) so one unreachable
+  // device doesn't take down topology lookups for everyone -- and each
+  // attempt is timeout-protected so a genuinely dead device fails fast
+  // rather than hanging the whole call.
+  for (const device of devicesByName.values()) {
+    try {
+      const groups = await withTimeout(device.getAllGroups(), DEVICE_CALL_TIMEOUT_MS, 'getAllGroups');
+      const map = {};
+      groups.forEach((zone) => {
+        const coordinatorMember = zone.ZoneGroupMember.find((m) => m.UUID === zone.Coordinator);
+        const coordinatorName = coordinatorMember ? coordinatorMember.ZoneName : null;
+        zone.ZoneGroupMember.forEach((member) => {
+          map[member.ZoneName] = coordinatorName || member.ZoneName;
+        });
+      });
+      lastCoordinatorMap = map;
+      return map;
+    } catch (err) {
+      debugLog.warn('sonos', `getAllGroups() failed on one device, trying another: ${err.message}`);
+    }
+  }
+  // Every device timed out/failed -- fall back to the last known-good
+  // topology rather than an empty map, which would incorrectly show
+  // every room as ungrouped.
+  return lastCoordinatorMap;
 }
 
 // Every room name currently sharing a coordinator with roomName
@@ -499,19 +535,19 @@ async function getRooms() {
         let muted = false;
         let reachable = true;
         try {
-          volume = await device.getVolume();
+          volume = await withTimeout(device.getVolume(), DEVICE_CALL_TIMEOUT_MS, `getVolume(${name})`);
         } catch (err) {
           debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
           reachable = false;
         }
         try {
-          const state = await device.getCurrentState();
+          const state = await withTimeout(device.getCurrentState(), DEVICE_CALL_TIMEOUT_MS, `getCurrentState(${name})`);
           playing = state === 'playing';
         } catch (err) {
           debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
         }
         try {
-          muted = await device.getMuted();
+          muted = await withTimeout(device.getMuted(), DEVICE_CALL_TIMEOUT_MS, `getMuted(${name})`);
         } catch (err) {
           debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
         }
@@ -553,19 +589,19 @@ async function getRoomsTargeted(targetRoomNames) {
           let muted = false;
           let reachable = true;
           try {
-            volume = await device.getVolume();
+            volume = await withTimeout(device.getVolume(), DEVICE_CALL_TIMEOUT_MS, `getVolume(${name})`);
           } catch (err) {
             debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
             reachable = false;
           }
           try {
-            const state = await device.getCurrentState();
+            const state = await withTimeout(device.getCurrentState(), DEVICE_CALL_TIMEOUT_MS, `getCurrentState(${name})`);
             playing = state === 'playing';
           } catch (err) {
             debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
           }
           try {
-            muted = await device.getMuted();
+            muted = await withTimeout(device.getMuted(), DEVICE_CALL_TIMEOUT_MS, `getMuted(${name})`);
           } catch (err) {
             debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
           }
@@ -1036,7 +1072,7 @@ async function groupRooms(roomNames) {
     members.map((memberName) => {
       const member = findDevice(memberName);
       if (!member) return Promise.reject(new Error(`${memberName} not found`));
-      return guarded(`groupRooms(${memberName} -> ${coordinatorName})`, () => member.joinGroup(coordinatorName));
+      return guarded(`groupRooms(${memberName} -> ${coordinatorName})`, () => withTimeout(member.joinGroup(coordinatorName), DEVICE_CALL_TIMEOUT_MS, `joinGroup(${memberName})`));
     })
   );
   const succeeded = [];
@@ -1093,7 +1129,7 @@ async function ungroupRoom(roomName) {
   const device = findDevice(roomName);
   if (!device) return { reachable: true };
   try {
-    await device.leaveGroup();
+    await withTimeout(device.leaveGroup(), DEVICE_CALL_TIMEOUT_MS, `leaveGroup(${roomName})`);
     return { reachable: true };
   } catch (err) {
     // Deliberately NOT re-throwing -- a device that's unreachable

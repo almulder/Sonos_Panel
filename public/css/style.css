@@ -378,6 +378,13 @@ button {
   overflow-y: auto;
   margin-bottom: 8px;
 }
+.savegroup-checking {
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
 .savegroup-checkrow {
   display: flex;
   align-items: center;
