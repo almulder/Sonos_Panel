@@ -271,6 +271,14 @@ const SonosView = (() => {
       nameLine.appendChild(dot);
     }
 
+    if (room.muted) {
+      const muteIcon = document.createElement('span');
+      muteIcon.className = 'roomrow__mute-icon';
+      muteIcon.textContent = '\u{1F507}'; // muted speaker emoji
+      muteIcon.setAttribute('aria-label', 'Muted');
+      nameLine.appendChild(muteIcon);
+    }
+
     const name = document.createElement('span');
     name.className = 'roomrow__name';
     name.textContent = room.name;
@@ -320,6 +328,13 @@ const SonosView = (() => {
 
     const main = document.createElement('div');
     main.className = 'roomrow__main roomrow__main--member';
+    if (room.muted) {
+      const muteIcon = document.createElement('span');
+      muteIcon.className = 'roomrow__mute-icon';
+      muteIcon.textContent = '\u{1F507}';
+      muteIcon.setAttribute('aria-label', 'Muted');
+      main.appendChild(muteIcon);
+    }
     const name = document.createElement('span');
     name.className = 'roomrow__name';
     name.textContent = room.name;
@@ -819,6 +834,18 @@ const SonosView = (() => {
       // externally (e.g. from the official Sonos app) or as a side
       // effect of a group-volume adjustment redistributing per-room
       // levels.
+      await syncVolumeRailToFocusedRoom();
+    },
+    // Lightweight signals from the server (see server/sonos.js's
+    // AVTransport/GroupRenderingControl event handling) -- these just
+    // mean "something changed, go check" rather than carrying the new
+    // data themselves, so this just re-runs the same refresh logic
+    // already used after a normal user action. No-ops if the change
+    // doesn't concern whatever's currently focused.
+    async handleNowPlayingChanged(room) {
+      if (room === focusedRoom) await refreshNowPlaying();
+    },
+    async handleGroupVolumeChanged() {
       await syncVolumeRailToFocusedRoom();
     },
     getFocusedRoom() {

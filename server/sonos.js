@@ -76,13 +76,30 @@ function notifyLiveUpdate() {
   if (liveUpdateCallback) liveUpdateCallback(getLastKnownRooms());
 }
 
+// Two more lightweight signals, separate from the room-list update above --
+// these don't carry new data themselves, they just tell index.js "go tell
+// the client to re-fetch this," reusing the client's own existing
+// refreshNowPlaying()/syncVolumeRailToFocusedRoom() rather than us trying
+// to reconstruct their already-fairly-involved logic (source-line
+// detection, Line-In relay lookups, etc.) a second time from a raw event
+// payload. Cheap and safe even if the room isn't the one currently
+// focused in the browser -- the client just checks and no-ops otherwise.
+let nowPlayingChangedCallback = null;
+function onNowPlayingChanged(callback) {
+  nowPlayingChangedCallback = callback;
+}
+let groupVolumeChangedCallback = null;
+function onGroupVolumeChanged(callback) {
+  groupVolumeChangedCallback = callback;
+}
+
 function buildMockState() {
   return {
     rooms: [
-      { name: 'Living Room', volume: 34, playing: true, coordinator: 'Living Room' },
-      { name: 'Kitchen', volume: 28, playing: true, coordinator: 'Living Room' },
-      { name: 'Patio', volume: 45, playing: false, coordinator: 'Patio' },
-      { name: 'Office', volume: 20, playing: false, coordinator: 'Office' }
+      { name: 'Living Room', volume: 34, playing: true, muted: false, coordinator: 'Living Room' },
+      { name: 'Kitchen', volume: 28, playing: true, muted: false, coordinator: 'Living Room' },
+      { name: 'Patio', volume: 45, playing: false, muted: false, coordinator: 'Patio' },
+      { name: 'Office', volume: 20, playing: false, muted: false, coordinator: 'Office' }
     ],
     nowPlaying: {
       'Living Room': {
@@ -247,10 +264,9 @@ function findDevice(roomName) {
 // restart, with nothing to notice or self-heal it.
 function attachDeviceEventListeners(name, device) {
   device.on('PlayState', (state) => {
-    debugLog.info('sonos', `[timing] PlayState event for ${name} -> ${state} at ${Date.now()}`);
     try {
       const playing = state === 'playing';
-      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, coordinator: name };
+      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, coordinator: name };
       lastRoomsByName.set(name, { ...existing, playing });
       notifyLiveUpdate();
     } catch (err) {
@@ -260,11 +276,53 @@ function attachDeviceEventListeners(name, device) {
 
   device.on('Volume', (volume) => {
     try {
-      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, coordinator: name };
+      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, coordinator: name };
       lastRoomsByName.set(name, { ...existing, volume });
       notifyLiveUpdate();
     } catch (err) {
       debugLog.warn('sonos', `Error handling Volume event for ${name}: ${err.message}`);
+    }
+  });
+
+  device.on('Muted', (muted) => {
+    try {
+      const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, coordinator: name };
+      lastRoomsByName.set(name, { ...existing, muted });
+      notifyLiveUpdate();
+    } catch (err) {
+      debugLog.warn('sonos', `Error handling Muted event for ${name}: ${err.message}`);
+    }
+  });
+
+  // Raw AVTransport covers more than just play/pause (which PlayState
+  // above already handles) -- it also fires on track changes and on
+  // shuffle/repeat (CurrentPlayMode) changes. Rather than trying to
+  // reconstruct the full now-playing picture from this raw payload
+  // (title/artist/art/source-line detection is already fairly involved
+  // logic that getNowPlaying() owns), this just signals "something
+  // changed for this room" and lets the client re-run its own existing
+  // refreshNowPlaying() if that room happens to be the focused one --
+  // cheap, safe, and avoids duplicating that logic a second time here.
+  device.on('AVTransport', () => {
+    try {
+      if (nowPlayingChangedCallback) nowPlayingChangedCallback(name);
+    } catch (err) {
+      debugLog.warn('sonos', `Error handling AVTransport event for ${name}: ${err.message}`);
+    }
+  });
+
+  // Group volume (the synced slider across a bonded group) is a
+  // separate concept from each speaker's own individual volume above.
+  // Same lightweight-signal approach as AVTransport -- let the client
+  // re-run its existing syncVolumeRailToFocusedRoom() rather than us
+  // hand-parsing the raw GroupRenderingControl payload (which the
+  // library doesn't parse into clean fields the way it does for plain
+  // RenderingControl).
+  device.on('GroupRenderingControl', () => {
+    try {
+      if (groupVolumeChangedCallback) groupVolumeChangedCallback();
+    } catch (err) {
+      debugLog.warn('sonos', `Error handling GroupRenderingControl event for ${name}: ${err.message}`);
     }
   });
 }
@@ -390,6 +448,7 @@ async function getRooms() {
         const name = displayNameByKey.get(key) || key;
         let volume = 0;
         let playing = false;
+        let muted = false;
         try {
           volume = await device.getVolume();
         } catch (err) {
@@ -401,7 +460,12 @@ async function getRooms() {
         } catch (err) {
           debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
         }
-        return { name, volume, playing, coordinator: coordinatorMap[name] || name };
+        try {
+          muted = await device.getMuted();
+        } catch (err) {
+          debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
+        }
+        return { name, volume, playing, muted, coordinator: coordinatorMap[name] || name };
       })
     );
     rooms.sort((a, b) => a.name.localeCompare(b.name));
@@ -436,6 +500,7 @@ async function getRoomsTargeted(targetRoomNames) {
           const name = displayNameByKey.get(key) || key;
           let volume = 0;
           let playing = false;
+          let muted = false;
           try {
             volume = await device.getVolume();
           } catch (err) {
@@ -447,8 +512,13 @@ async function getRoomsTargeted(targetRoomNames) {
           } catch (err) {
             debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
           }
+          try {
+            muted = await device.getMuted();
+          } catch (err) {
+            debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
+          }
           const coordinator = lastCoordinatorMap[name] || name;
-          return { name, volume, playing, coordinator };
+          return { name, volume, playing, muted, coordinator };
         })
     );
 
@@ -536,7 +606,6 @@ async function getNowPlaying(roomName) {
   }
   const device = findDevice(roomName);
   if (!device) return null;
-  debugLog.info('sonos', `[timing] getNowPlaying(${roomName}) starting at ${Date.now()}`);
   try {
     const [track, state, playMode] = await Promise.all([
       device.currentTrack(),
@@ -546,7 +615,6 @@ async function getNowPlaying(roomName) {
         return 'NORMAL';
       })
     ]);
-    debugLog.info('sonos', `[timing] getNowPlaying(${roomName}) resolved at ${Date.now()} with state=${state}`);
 
     // Source line: identifies WHERE the audio is coming from, since
     // title/artist alone don't cover this -- confirmed useful in
@@ -623,9 +691,7 @@ async function play(roomName) {
   }
   const device = findDevice(roomName);
   if (!device) return;
-  debugLog.info('sonos', `[timing] play(${roomName}) SOAP call starting at ${Date.now()}`);
   await guarded(`play(${roomName})`, () => device.play());
-  debugLog.info('sonos', `[timing] play(${roomName}) SOAP call resolved at ${Date.now()}`);
 }
 
 async function pause(roomName) {
@@ -1302,6 +1368,8 @@ module.exports = {
   patchCoordinatorOptimistically,
   getLastKnownRooms,
   onLiveUpdate,
+  onNowPlayingChanged,
+  onGroupVolumeChanged,
   getNowPlaying,
   play,
   pause,

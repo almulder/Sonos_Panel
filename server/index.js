@@ -355,11 +355,23 @@ async function main() {
     });
   }
 
-  // Real-time push updates from sonos.js (PlayState/Volume/topology
+  // Real-time push updates from sonos.js (PlayState/Volume/Muted/topology
   // events) call this the instant something changes, independent of
   // the poll loop below.
   sonos.onLiveUpdate((rooms) => {
     broadcast({ type: 'sonos:rooms', rooms });
+  });
+
+  // Two lightweight signals -- these don't carry the changed data
+  // themselves, they just tell the client "go re-fetch this if it's
+  // relevant to what you're currently showing" (see the client-side
+  // handling in app.js/sonosView.js for why -- reusing the client's
+  // existing refresh logic rather than duplicating it here).
+  sonos.onNowPlayingChanged((room) => {
+    broadcast({ type: 'sonos:nowplaying-changed', room });
+  });
+  sonos.onGroupVolumeChanged(() => {
+    broadcast({ type: 'sonos:groupvolume-changed' });
   });
 
   // Lets route handlers (see the optimistic patch in /api/sonos/group

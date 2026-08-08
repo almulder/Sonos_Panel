@@ -71,7 +71,7 @@ button {
    at those proportions needs real room, not just the 56px minimum.
 --------------------------------------------------------------------- */
 .tabbar {
-  --tab-height: 80px;
+  --tab-height: 40px;
   display: flex;
   gap: 8px;
   padding: 10px 20px 0;
@@ -376,6 +376,12 @@ button {
   border-radius: 50%;
   background: var(--amber);
   box-shadow: 0 0 6px 1px var(--amber);
+  flex-shrink: 0;
+}
+
+.roomrow__mute-icon {
+  font-size: 12px;
+  line-height: 1;
   flex-shrink: 0;
 }
 
