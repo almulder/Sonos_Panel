@@ -32,6 +32,7 @@
 const { Sonos, AsyncDeviceDiscovery, Helpers, Services, Listener } = require('sonos');
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
 const debugLog = require('./debugLog');
 
 // Manual overrides that are more reliable than guessing at UPnP fields --
@@ -50,6 +51,44 @@ try {
 }
 
 const DISCOVERY_TIMEOUT_MS = 8000;
+
+// Saved room-group presets -- the equivalent of the official Sonos app's
+// "Saved Groups" feature, which turned out to be a cloud-account-only
+// feature (nothing in the local UPnP API exposes it, confirmed against
+// SoCo's fairly exhaustive feature set). This reimplements the same
+// practical outcome locally: a name plus a list of room names, stored
+// as a JSON file in dataDir so it survives container updates the same
+// way config.json does. Applying one just calls the existing groupRooms
+// with its stored room list -- no new grouping logic needed.
+const savedGroupsPath = path.join(dataDir, 'saved-groups.json');
+function loadSavedGroups() {
+  try {
+    return JSON.parse(fs.readFileSync(savedGroupsPath, 'utf8'));
+  } catch (err) {
+    return [];
+  }
+}
+function writeSavedGroups(groups) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(savedGroupsPath, JSON.stringify(groups, null, 2));
+}
+function getSavedGroups() {
+  return loadSavedGroups();
+}
+function addSavedGroup(name, roomNames) {
+  const groups = loadSavedGroups();
+  const group = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name: (name || '').trim() || roomNames.join(' + '),
+    rooms: roomNames
+  };
+  groups.push(group);
+  writeSavedGroups(groups);
+  return group;
+}
+function deleteSavedGroup(id) {
+  writeSavedGroups(loadSavedGroups().filter((g) => g.id !== id));
+}
 
 let usingMock = true;
 let devicesByName = new Map();
@@ -1525,6 +1564,9 @@ module.exports = {
   getRoomsTargeted,
   getGroupMemberNames,
   patchCoordinatorOptimistically,
+  getSavedGroups,
+  addSavedGroup,
+  deleteSavedGroup,
   getLastKnownRooms,
   onLiveUpdate,
   onNowPlayingChanged,

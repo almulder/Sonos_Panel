@@ -268,6 +268,29 @@ app.post('/api/sonos/room/:room/ungroup', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------------- Saved group presets ----------------
+// Local equivalent of the official app's "Saved Groups" -- see the
+// comment above these functions in sonos.js for why this couldn't just
+// read Sonos's own saved groups (cloud-account-only, no local API).
+
+app.get('/api/sonos/saved-groups', asyncHandler(async (req, res) => {
+  res.json({ groups: sonos.getSavedGroups() });
+}));
+
+app.post('/api/sonos/saved-groups', asyncHandler(async (req, res) => {
+  const { name, rooms } = req.body;
+  if (!Array.isArray(rooms) || rooms.length < 2) {
+    return res.status(400).json({ error: 'A saved group needs at least 2 rooms' });
+  }
+  const group = sonos.addSavedGroup(name, rooms);
+  res.json({ group });
+}));
+
+app.delete('/api/sonos/saved-groups/:id', asyncHandler(async (req, res) => {
+  sonos.deleteSavedGroup(req.params.id);
+  res.json({ ok: true });
+}));
+
 app.get('/api/sonos/room/:room/source-groups', asyncHandler(async (req, res) => {
   const groups = await sonos.getSourceGroups(req.params.room);
   res.json({ groups });

@@ -129,6 +129,8 @@ function buildSourceIcon(group) {
 const SonosView = (() => {
   const roomListEl = document.getElementById('roomList');
   const roomlistPanel = document.getElementById('sonosRoomlist');
+  const savedGroupsList = document.getElementById('savedGroupsList');
+  const savedGroupsAddBtn = document.getElementById('savedGroupsAddBtn');
   const titleEl = document.getElementById('sonosTitle');
   const artistEl = document.getElementById('sonosArtist');
   const groupLabelEl = document.getElementById('sonosGroupLabel');
@@ -453,6 +455,159 @@ const SonosView = (() => {
     }
     render();
   }
+
+  // ---------------- Saved group presets ----------------
+  // Local equivalent of the official Sonos app's "Saved Groups" (that
+  // feature turned out to be cloud-account-only, not reachable from
+  // here). A saved group is just a name + list of room names -- tapping
+  // its chip fires the exact same /api/sonos/group call manual
+  // selection already uses.
+
+  async function refreshSavedGroups() {
+    const data = await api('/api/sonos/saved-groups');
+    renderSavedGroups(data.groups || []);
+  }
+
+  function renderSavedGroups(groups) {
+    savedGroupsList.innerHTML = '';
+    groups.forEach((group) => {
+      const li = document.createElement('li');
+      li.className = 'savedgroups__chip';
+
+      const applyBtn = document.createElement('button');
+      applyBtn.className = 'savedgroups__chipbtn';
+      applyBtn.textContent = group.name;
+      applyBtn.addEventListener('click', async () => {
+        await api('/api/sonos/group', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rooms: group.rooms })
+        });
+        expandedCoordinators.add(group.rooms[0]);
+        render();
+      });
+      li.appendChild(applyBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'savedgroups__delbtn';
+      delBtn.textContent = '\u2715';
+      delBtn.setAttribute('aria-label', `Delete saved group ${group.name}`);
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await api(`/api/sonos/saved-groups/${encodeURIComponent(group.id)}`, { method: 'DELETE' });
+        await refreshSavedGroups();
+      });
+      li.appendChild(delBtn);
+
+      savedGroupsList.appendChild(li);
+    });
+  }
+
+  // Creation modal -- deliberately keyboard-optional. The name field is
+  // pre-filled with an auto-generated default built from whichever
+  // rooms are checked, kept in sync live as the selection changes,
+  // right up until the person actually types something themselves.
+  // This means the whole flow works with taps alone on a kiosk tablet
+  // where the on-screen keyboard may not reliably appear, while still
+  // allowing a custom name from a device with a real keyboard.
+  let saveGroupModalEl = null;
+  function buildSaveGroupModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'roomsettings-overlay';
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.style.display = 'none';
+    });
+
+    const sheet = document.createElement('div');
+    sheet.className = 'roomsettings-sheet';
+
+    const header = document.createElement('div');
+    header.className = 'roomsettings-sheet__header';
+    const title = document.createElement('h3');
+    title.className = 'roomsettings-sheet__title';
+    title.textContent = 'Save a Group';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'roomsettings-sheet__close';
+    closeBtn.textContent = '\u2715';
+    closeBtn.addEventListener('click', () => { overlay.style.display = 'none'; });
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+    sheet.appendChild(header);
+
+    const checklist = document.createElement('div');
+    checklist.className = 'savegroup-checklist';
+    sheet.appendChild(checklist);
+
+    const nameRow = document.createElement('div');
+    nameRow.className = 'roomsettings-sheet__row';
+    const nameLabel = document.createElement('label');
+    nameLabel.textContent = 'Name';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'savegroup-nameinput';
+    nameRow.appendChild(nameLabel);
+    nameRow.appendChild(nameInput);
+    sheet.appendChild(nameRow);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'savegroup-savebtn';
+    saveBtn.textContent = 'Save Group';
+    sheet.appendChild(saveBtn);
+
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+    return { overlay, checklist, nameInput, saveBtn };
+  }
+
+  function openSaveGroupModal() {
+    if (!saveGroupModalEl) saveGroupModalEl = buildSaveGroupModal();
+    const { overlay, checklist, nameInput, saveBtn } = saveGroupModalEl;
+    overlay.style.display = 'flex';
+
+    let nameEditedByUser = false;
+    nameInput.value = '';
+    nameInput.oninput = () => { nameEditedByUser = true; };
+
+    function selectedRooms() {
+      return [...checklist.querySelectorAll('input[type="checkbox"]:checked')].map((cb) => cb.value);
+    }
+    function updateDefaultName() {
+      if (nameEditedByUser) return;
+      nameInput.value = selectedRooms().join(' + ');
+    }
+
+    checklist.innerHTML = '';
+    // Every room, not just current top-level ones -- a saved group
+    // should be selectable regardless of whatever grouping happens to
+    // be active right now.
+    rooms.forEach((room) => {
+      const row = document.createElement('label');
+      row.className = 'savegroup-checkrow';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = room.name;
+      cb.addEventListener('change', updateDefaultName);
+      const span = document.createElement('span');
+      span.textContent = room.name;
+      row.appendChild(cb);
+      row.appendChild(span);
+      checklist.appendChild(row);
+    });
+
+    saveBtn.onclick = async () => {
+      const selected = selectedRooms();
+      if (selected.length < 2) return;
+      await api('/api/sonos/saved-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nameInput.value, rooms: selected })
+      });
+      overlay.style.display = 'none';
+      await refreshSavedGroups();
+    };
+  }
+
+  savedGroupsAddBtn.addEventListener('click', openSaveGroupModal);
 
   // Per-room sound settings sheet (bass/treble/loudness) -- built once
   // and reused/repopulated on each open rather than recreated every
@@ -1091,6 +1246,7 @@ const SonosView = (() => {
       await refreshNowPlaying();
       await syncVolumeRailToFocusedRoom();
       await openSourceGroups();
+      await refreshSavedGroups();
     },
     async refreshFromSocket(newRooms) {
       const newRoomsJson = JSON.stringify(newRooms);
