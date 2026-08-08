@@ -1,25 +1,39 @@
 // sonosView.js
 
 // Sonos offers a fixed set of Line-In "CurrentName" labels (set by the
-// user in the official app) -- icons matched to each. Two honest
-// approximations: there's no true dedicated Bluetooth emoji in standard
-// Unicode (used for Airplay Device) and no Mac-specific one either (used
-// for Mac Computer), so those two are closest-available stand-ins rather
-// than exact matches.
-const LINE_IN_DEVICE_ICONS = {
-  'Airplay Device': '\u{1F4F6}',
-  'Audio Component': '\u{1F50C}',
-  'CD Player': '\u{1F4BF}',
-  Computer: '\u{1F5A5}\uFE0F',
-  'Home Theater': '\u{1F4FA}',
-  'Mac Computer': '\u{1F4BB}',
-  'Portable Player': '\u{1F4F1}',
-  Receiver: '\u{1F50A}',
-  'Satellite Receiver': '\u{1F4E1}',
-  Turntable: '\u{1F4C0}'
+// user in the official app) -- each has its own icon file in
+// public/icons/ (see README-icons.txt). Falls back to the generic
+// source-linein.png if a name doesn't match any of these.
+const LINE_IN_ICON_FILES = {
+  'Airplay Device': 'linein-airplay',
+  'Audio Component': 'linein-audiocomponent',
+  'CD Player': 'linein-cdplayer',
+  Computer: 'linein-computer',
+  'Home Theater': 'linein-hometheater',
+  'Mac Computer': 'linein-maccomputer',
+  'Portable Player': 'linein-portableplayer',
+  Receiver: 'linein-receiver',
+  'Satellite Receiver': 'linein-satellitereceiver',
+  Turntable: 'linein-turntable'
 };
-function lineInDeviceIcon(name) {
-  return LINE_IN_DEVICE_ICONS[name] || '\u{1F50C}';
+function lineInIconFilename(name) {
+  return LINE_IN_ICON_FILES[name] || 'source-linein';
+}
+// Clears and repopulates `el` with an icon + the device name -- used
+// wherever a Line-In device name needs to display with its icon (Now
+// Playing artist line, and the source-browsing sublabel).
+function setLineInLabel(el, deviceName) {
+  el.textContent = '';
+  const img = document.createElement('img');
+  img.className = 'lineinlabel__icon';
+  img.src = `icons/${lineInIconFilename(deviceName)}.png`;
+  img.alt = '';
+  img.onerror = () => {
+    img.onerror = null;
+    img.src = 'icons/source-linein.png';
+  };
+  el.appendChild(img);
+  el.appendChild(document.createTextNode(` ${deviceName}`));
 }
 
 // Real brand icons for streaming/audio services -- bundled locally in
@@ -104,13 +118,10 @@ function iconFilenameForService(serviceLabel) {
 
 function buildSourceIcon(group) {
   if (group.isLineInRoot) {
-    const span = document.createElement('span');
-    span.className = 'sourcepanel__icon';
-    span.textContent = '\u{1F50C}';
-    return span;
+    return buildImgIconWithFallback('source-linein');
   }
   if (group.isPlaylistRoot) {
-    return buildImgIconWithFallback('sonos');
+    return buildImgIconWithFallback('source-playlist');
   }
   return buildImgIconWithFallback(iconFilenameForService(group.title));
 }
@@ -126,6 +137,11 @@ const SonosView = (() => {
   const playPauseBtn = document.getElementById('sonosPlayPause');
   const prevBtn = document.getElementById('sonosPrev');
   const nextBtn = document.getElementById('sonosNext');
+  const shuffleBtn = document.getElementById('sonosShuffleBtn');
+  const crossfadeBtn = document.getElementById('sonosCrossfadeBtn');
+  const sleepTimerBtn = document.getElementById('sonosSleepTimerBtn');
+  const sleepTimerBadge = document.getElementById('sonosSleepTimerBadge');
+  const sleepTimerMenu = document.getElementById('sonosSleepTimerMenu');
 
   const sourcePanel = document.getElementById('sourcePanel');
   const sourcePanelTitle = document.getElementById('sourcePanelTitle');
@@ -236,6 +252,27 @@ const SonosView = (() => {
 
     wrap.appendChild(slider);
     wrap.appendChild(valueLabel);
+
+    // Only the focused room shows this -- with a group expanded, whichever
+    // specific room (coordinator or member) is actually focused gets it,
+    // not always the coordinator, so there's never more than one visible
+    // at once.
+    if (room.name === focusedRoom) {
+      const eqBtn = document.createElement('button');
+      eqBtn.className = 'roomrow__eqbtn';
+      eqBtn.setAttribute('aria-label', `${room.name} sound settings`);
+      const eqIcon = document.createElement('img');
+      eqIcon.src = 'icons/eq-settings.png';
+      eqIcon.alt = '';
+      eqIcon.className = 'roomrow__eqicon';
+      eqBtn.appendChild(eqIcon);
+      eqBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openRoomSettings(room.name);
+      });
+      wrap.appendChild(eqBtn);
+    }
+
     return wrap;
   }
 
@@ -417,6 +454,124 @@ const SonosView = (() => {
     render();
   }
 
+  // Per-room sound settings sheet (bass/treble/loudness) -- built once
+  // and reused/repopulated on each open rather than recreated every
+  // time, since it's the same structure regardless of which room.
+  let settingsSheetEl = null;
+  function buildSettingsSheet() {
+    const overlay = document.createElement('div');
+    overlay.className = 'roomsettings-overlay';
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.style.display = 'none';
+    });
+
+    const sheet = document.createElement('div');
+    sheet.className = 'roomsettings-sheet';
+
+    const header = document.createElement('div');
+    header.className = 'roomsettings-sheet__header';
+    const title = document.createElement('h3');
+    title.className = 'roomsettings-sheet__title';
+    title.id = 'roomsettingsTitle';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'roomsettings-sheet__close';
+    closeBtn.textContent = '\u2715';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.addEventListener('click', () => { overlay.style.display = 'none'; });
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+    sheet.appendChild(header);
+
+    function makeSlider(labelText, min, max) {
+      const row = document.createElement('div');
+      row.className = 'roomsettings-sheet__row';
+      const label = document.createElement('label');
+      label.textContent = labelText;
+      const valueEl = document.createElement('span');
+      valueEl.className = 'roomsettings-sheet__value';
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = String(min);
+      slider.max = String(max);
+      const labelRow = document.createElement('div');
+      labelRow.className = 'roomsettings-sheet__labelrow';
+      labelRow.appendChild(label);
+      labelRow.appendChild(valueEl);
+      row.appendChild(labelRow);
+      row.appendChild(slider);
+      sheet.appendChild(row);
+      return { slider, valueEl };
+    }
+    function makeToggleRow(labelText) {
+      const row = document.createElement('div');
+      row.className = 'roomsettings-sheet__row roomsettings-sheet__row--toggle';
+      const label = document.createElement('label');
+      label.textContent = labelText;
+      const toggle = document.createElement('button');
+      toggle.className = 'roomsettings-sheet__toggle';
+      row.appendChild(label);
+      row.appendChild(toggle);
+      sheet.appendChild(row);
+      return toggle;
+    }
+
+    const bass = makeSlider('Bass', -10, 10);
+    const treble = makeSlider('Treble', -10, 10);
+    const loudness = makeToggleRow('Loudness');
+
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+    return { overlay, title, bass, treble, loudness };
+  }
+
+  async function openRoomSettings(roomName) {
+    if (!settingsSheetEl) settingsSheetEl = buildSettingsSheet();
+    const { overlay, title, bass, treble, loudness } = settingsSheetEl;
+    title.textContent = `${roomName} Sound`;
+    overlay.style.display = 'flex';
+
+    const settings = await api(`/api/sonos/room/${encodeURIComponent(roomName)}/settings`);
+    if (!settings) return;
+
+    bass.slider.value = String(settings.bass);
+    bass.valueEl.textContent = String(settings.bass);
+    bass.slider.oninput = () => { bass.valueEl.textContent = bass.slider.value; };
+    bass.slider.onchange = async () => {
+      await api(`/api/sonos/room/${encodeURIComponent(roomName)}/bass`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: Number(bass.slider.value) })
+      });
+    };
+
+    treble.slider.value = String(settings.treble);
+    treble.valueEl.textContent = String(settings.treble);
+    treble.slider.oninput = () => { treble.valueEl.textContent = treble.slider.value; };
+    treble.slider.onchange = async () => {
+      await api(`/api/sonos/room/${encodeURIComponent(roomName)}/treble`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: Number(treble.slider.value) })
+      });
+    };
+
+    let loudnessOn = !!settings.loudness;
+    const renderLoudness = () => {
+      loudness.classList.toggle('is-active', loudnessOn);
+      loudness.textContent = loudnessOn ? 'On' : 'Off';
+    };
+    renderLoudness();
+    loudness.onclick = async () => {
+      loudnessOn = !loudnessOn;
+      renderLoudness();
+      await api(`/api/sonos/room/${encodeURIComponent(roomName)}/loudness`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: loudnessOn })
+      });
+    };
+  }
+
   async function refreshNowPlaying() {
     if (!focusedRoom) return;
     const track = await api(`/api/sonos/nowplaying/${encodeURIComponent(focusedRoom)}`);
@@ -443,7 +598,7 @@ const SonosView = (() => {
       titleEl.textContent = 'Nothing playing';
     }
     if (track && track.lineInDeviceName) {
-      artistEl.textContent = `${lineInDeviceIcon(track.lineInDeviceName)} ${track.lineInDeviceName}`;
+      setLineInLabel(artistEl, track.lineInDeviceName);
     } else {
       artistEl.textContent = track && track.artist ? track.artist : '\u00A0';
     }
@@ -458,6 +613,44 @@ const SonosView = (() => {
     }
 
     progress.update(track ? track.position : 0, track ? track.duration : 0, currentlyPlaying);
+
+    updateShuffleCrossfadeUI(track);
+    updateSleepTimerBadge(track ? track.sleepTimerRemainingSeconds : 0);
+  }
+
+  function updateShuffleCrossfadeUI(track) {
+    const shuffleOn = !!(track && track.shuffleOn);
+    const shuffleAvailable = !track || track.shuffleAvailable !== false;
+    shuffleBtn.classList.toggle('is-active', shuffleOn);
+    shuffleBtn.setAttribute('aria-pressed', String(shuffleOn));
+    shuffleBtn.disabled = !shuffleAvailable;
+    shuffleBtn.classList.toggle('is-disabled', !shuffleAvailable);
+    shuffleBtn.title = shuffleAvailable ? 'Shuffle' : 'Shuffle unavailable on streams';
+
+    const crossfadeOn = !!(track && track.crossfadeOn);
+    crossfadeBtn.classList.toggle('is-active', crossfadeOn);
+    crossfadeBtn.setAttribute('aria-pressed', String(crossfadeOn));
+  }
+
+  function formatSleepTimerBadge(seconds) {
+    if (seconds <= 0) return '';
+    const mins = Math.ceil(seconds / 60);
+    if (mins < 60) return `${mins}m`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m === 0 ? `${h}h` : `${h}h${m}m`;
+  }
+
+  function updateSleepTimerBadge(seconds) {
+    const label = formatSleepTimerBadge(seconds || 0);
+    if (label) {
+      sleepTimerBadge.textContent = label;
+      sleepTimerBadge.style.display = '';
+      sleepTimerBtn.classList.add('is-active');
+    } else {
+      sleepTimerBadge.style.display = 'none';
+      sleepTimerBtn.classList.remove('is-active');
+    }
   }
 
   async function syncVolumeRailToFocusedRoom() {
@@ -500,6 +693,82 @@ const SonosView = (() => {
       setTimeout(refreshNowPlaying, 2000);
     } else {
       await refreshNowPlaying();
+    }
+  });
+
+  shuffleBtn.addEventListener('click', async () => {
+    if (!focusedRoom || shuffleBtn.disabled) return;
+    const nowOn = !shuffleBtn.classList.contains('is-active');
+    shuffleBtn.classList.toggle('is-active', nowOn); // optimistic, corrected by the next refresh either way
+    await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/shuffle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: nowOn })
+    });
+    await refreshNowPlaying();
+  });
+
+  crossfadeBtn.addEventListener('click', async () => {
+    if (!focusedRoom) return;
+    const nowOn = !crossfadeBtn.classList.contains('is-active');
+    crossfadeBtn.classList.toggle('is-active', nowOn);
+    await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/crossfade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: nowOn })
+    });
+    await refreshNowPlaying();
+  });
+
+  // Sleep timer picker -- covers everything from 15 minutes up to 12
+  // hours. Values are in minutes; the server converts to the H:MM:SS
+  // string ConfigureSleepTimer expects.
+  const SLEEP_TIMER_OPTIONS_MINUTES = [15, 30, 45, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 360, 420, 480, 540, 600, 660, 720];
+  function buildSleepTimerMenu() {
+    sleepTimerMenu.innerHTML = '';
+    const offItem = document.createElement('li');
+    const offBtn = document.createElement('button');
+    offBtn.textContent = 'Off';
+    offBtn.addEventListener('click', async () => {
+      sleepTimerMenu.style.display = 'none';
+      if (!focusedRoom) return;
+      await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/sleeptimer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minutes: 0 })
+      });
+      await refreshNowPlaying();
+    });
+    offItem.appendChild(offBtn);
+    sleepTimerMenu.appendChild(offItem);
+
+    SLEEP_TIMER_OPTIONS_MINUTES.forEach((mins) => {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.textContent = mins < 60 ? `${mins}m` : (mins % 60 === 0 ? `${mins / 60}h` : `${(mins / 60).toFixed(1)}h`);
+      btn.addEventListener('click', async () => {
+        sleepTimerMenu.style.display = 'none';
+        if (!focusedRoom) return;
+        await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/sleeptimer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ minutes: mins })
+        });
+        await refreshNowPlaying();
+      });
+      li.appendChild(btn);
+      sleepTimerMenu.appendChild(li);
+    });
+  }
+  buildSleepTimerMenu();
+
+  sleepTimerBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    sleepTimerMenu.style.display = sleepTimerMenu.style.display === 'none' ? '' : 'none';
+  });
+  document.addEventListener('click', (e) => {
+    if (!sleepTimerMenu.contains(e.target) && e.target !== sleepTimerBtn) {
+      sleepTimerMenu.style.display = 'none';
     }
   });
 
@@ -759,7 +1028,7 @@ const SonosView = (() => {
       if (item.isLineInLeaf && item.currentName) {
         const sub = document.createElement('span');
         sub.className = 'sourcepanel__servicelabel';
-        sub.textContent = `${lineInDeviceIcon(item.currentName)} ${item.currentName}`;
+        setLineInLabel(sub, item.currentName);
         labelBlock.appendChild(sub);
       }
       li.appendChild(labelBlock);

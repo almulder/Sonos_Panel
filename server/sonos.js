@@ -596,25 +596,88 @@ async function getCachedPlaylistTrackByUri(roomName, playlistId, uri) {
   }
 }
 
+// Streams/radio (Favorites playing a station, internet radio, etc.) don't
+// support shuffle -- there's no queue to shuffle, just a continuous
+// stream. Detected via URI scheme rather than gambling on a specific
+// field name in Sonos's event data that isn't verified against this
+// library's actual behavior. Defaults to "shuffle available" for
+// anything unrecognized, since a wrongly-enabled button is a much
+// smaller problem than a wrongly-greyed-out one on legitimate content.
+const NO_SHUFFLE_URI_PREFIXES = ['x-sonosapi-radio:', 'x-sonosapi-stream:', 'x-sonosapi-hls:', 'x-rincon-mp3radio:', 'x-rincon-stream:'];
+function isShuffleAvailable(uri) {
+  if (!uri) return true;
+  return !NO_SHUFFLE_URI_PREFIXES.some((prefix) => uri.startsWith(prefix));
+}
+
+// Sonos combines shuffle+repeat into one enum rather than two
+// independent flags -- decompose/compose so the UI can treat shuffle as
+// a simple on/off toggle without silently discarding whatever repeat
+// mode was already set.
+function decomposePlayMode(mode) {
+  switch (mode) {
+    case 'SHUFFLE': return { shuffle: true, repeat: 'all' };
+    case 'SHUFFLE_NOREPEAT': return { shuffle: true, repeat: 'none' };
+    case 'SHUFFLE_REPEAT_ONE': return { shuffle: true, repeat: 'one' };
+    case 'REPEAT_ALL': return { shuffle: false, repeat: 'all' };
+    case 'REPEAT_ONE': return { shuffle: false, repeat: 'one' };
+    default: return { shuffle: false, repeat: 'none' };
+  }
+}
+function composePlayMode(shuffle, repeat) {
+  if (shuffle) {
+    if (repeat === 'all') return 'SHUFFLE';
+    if (repeat === 'one') return 'SHUFFLE_REPEAT_ONE';
+    return 'SHUFFLE_NOREPEAT';
+  }
+  if (repeat === 'all') return 'REPEAT_ALL';
+  if (repeat === 'one') return 'REPEAT_ONE';
+  return 'NORMAL';
+}
+
+function parseHmsToSeconds(hms) {
+  if (!hms || typeof hms !== 'string') return 0;
+  const parts = hms.split(':').map(Number);
+  if (parts.some(Number.isNaN)) return 0;
+  const [h, m, s] = parts.length === 3 ? parts : [0, ...parts];
+  return h * 3600 + m * 60 + s;
+}
+function secondsToHms(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
 async function getNowPlaying(roomName) {
   if (usingMock) {
     return (
       mockState.nowPlaying[roomName] || {
-        title: '', artist: '', album: '', albumArtUrl: null, playing: false, position: 0, duration: 0, playMode: 'NORMAL', sourceLine: null
+        title: '', artist: '', album: '', albumArtUrl: null, playing: false, position: 0, duration: 0, playMode: 'NORMAL', sourceLine: null,
+        shuffleOn: false, shuffleAvailable: true, crossfadeOn: false, sleepTimerRemainingSeconds: 0
       }
     );
   }
   const device = findDevice(roomName);
   if (!device) return null;
   try {
-    const [track, state, playMode] = await Promise.all([
+    const [track, state, playMode, crossfadeOn, sleepTimerRemainingSeconds] = await Promise.all([
       device.currentTrack(),
       device.getCurrentState(),
       device.getPlayMode().catch((err) => {
         debugLog.warn('sonos', `getPlayMode() failed for ${roomName}: ${err.message}`);
         return 'NORMAL';
+      }),
+      device.avTransportService().GetCrossfadeMode().then((r) => Boolean(Number(r.CrossfadeMode))).catch((err) => {
+        debugLog.warn('sonos', `GetCrossfadeMode() failed for ${roomName}: ${err.message}`);
+        return false;
+      }),
+      device.avTransportService().GetRemainingSleepTimerDuration().then((r) => parseHmsToSeconds(r.RemainingSleepTimerDuration)).catch((err) => {
+        debugLog.warn('sonos', `GetRemainingSleepTimerDuration() failed for ${roomName}: ${err.message}`);
+        return 0;
       })
     ]);
+    const { shuffle: shuffleOn } = decomposePlayMode(playMode);
 
     // Source line: identifies WHERE the audio is coming from, since
     // title/artist alone don't cover this -- confirmed useful in
@@ -675,6 +738,10 @@ async function getNowPlaying(roomName) {
       position: track.position || 0,
       duration: track.duration || 0,
       playMode,
+      shuffleOn,
+      shuffleAvailable: isShuffleAvailable(track.uri),
+      crossfadeOn,
+      sleepTimerRemainingSeconds,
       sourceLine
     };
   } catch (err) {
@@ -761,6 +828,86 @@ async function setPlayMode(roomName, mode) {
   const device = findDevice(roomName);
   if (!device) return;
   await guarded(`setPlayMode(${roomName}, ${mode})`, () => device.setPlayMode(mode));
+}
+
+// Shuffle is exposed as a simple on/off toggle in the UI, but Sonos
+// combines it with repeat into one enum (see decomposePlayMode/
+// composePlayMode above) -- so toggling it needs to read the CURRENT
+// mode first and preserve whatever repeat setting was already active,
+// rather than always resetting to a fixed mode.
+async function setShuffle(roomName, enabled) {
+  if (usingMock) {
+    if (mockState.nowPlaying[roomName]) {
+      const { repeat } = decomposePlayMode(mockState.nowPlaying[roomName].playMode || 'NORMAL');
+      mockState.nowPlaying[roomName].playMode = composePlayMode(enabled, repeat);
+    }
+    return;
+  }
+  const device = findDevice(roomName);
+  if (!device) return;
+  await guarded(`setShuffle(${roomName})`, async () => {
+    const currentMode = await device.getPlayMode();
+    const { repeat } = decomposePlayMode(currentMode);
+    await device.setPlayMode(composePlayMode(enabled, repeat));
+  });
+}
+
+async function setCrossfade(roomName, enabled) {
+  if (usingMock) return;
+  const device = findDevice(roomName);
+  if (!device) return;
+  await guarded(`setCrossfade(${roomName})`, () =>
+    device.avTransportService().SetCrossfadeMode({ InstanceID: 0, CrossfadeMode: enabled ? '1' : '0' })
+  );
+}
+
+// minutes <= 0 cancels the timer (empty string per the UPnP spec for
+// this action). Otherwise converts to the "H:MM:SS" duration string
+// ConfigureSleepTimer expects.
+async function setSleepTimer(roomName, minutes) {
+  if (usingMock) return;
+  const device = findDevice(roomName);
+  if (!device) return;
+  const duration = minutes > 0 ? secondsToHms(minutes * 60) : '';
+  await guarded(`setSleepTimer(${roomName})`, () => device.configureSleepTimer(duration));
+}
+
+// Bass/treble range -10 to +10 per the UPnP spec, clamped defensively
+// here rather than trusting whatever the client sent.
+async function getRoomSettings(roomName) {
+  if (usingMock) return { bass: 0, treble: 0, loudness: true, crossfade: false };
+  const device = findDevice(roomName);
+  if (!device) return null;
+  const [bass, treble, loudness, crossfade] = await Promise.all([
+    device.renderingControlService().GetBass().catch(() => 0),
+    device.renderingControlService().GetTreble().catch(() => 0),
+    device.renderingControlService().GetLoudness().catch(() => true),
+    device.avTransportService().GetCrossfadeMode().then((r) => Boolean(Number(r.CrossfadeMode))).catch(() => false)
+  ]);
+  return { bass, treble, loudness: Boolean(loudness), crossfade };
+}
+
+async function setBass(roomName, value) {
+  if (usingMock) return;
+  const device = findDevice(roomName);
+  if (!device) return;
+  const clamped = Math.max(-10, Math.min(10, Math.round(value)));
+  await guarded(`setBass(${roomName})`, () => device.renderingControlService().SetBass(clamped));
+}
+
+async function setTreble(roomName, value) {
+  if (usingMock) return;
+  const device = findDevice(roomName);
+  if (!device) return;
+  const clamped = Math.max(-10, Math.min(10, Math.round(value)));
+  await guarded(`setTreble(${roomName})`, () => device.renderingControlService().SetTreble(clamped));
+}
+
+async function setLoudness(roomName, enabled) {
+  if (usingMock) return;
+  const device = findDevice(roomName);
+  if (!device) return;
+  await guarded(`setLoudness(${roomName})`, () => device.renderingControlService().SetLoudness(enabled));
 }
 
 async function groupRooms(roomNames) {
@@ -1381,6 +1528,13 @@ module.exports = {
   setGroupVolume,
   setGroupMute,
   setPlayMode,
+  setShuffle,
+  setCrossfade,
+  setSleepTimer,
+  getRoomSettings,
+  setBass,
+  setTreble,
+  setLoudness,
   groupRooms,
   ungroupRoom,
   getSourceGroups,

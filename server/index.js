@@ -331,6 +331,41 @@ app.post('/api/sonos/room/:room/playmode', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.post('/api/sonos/room/:room/shuffle', asyncHandler(async (req, res) => {
+  await sonos.setShuffle(req.params.room, req.body.enabled);
+  res.json({ ok: true });
+}));
+
+app.post('/api/sonos/room/:room/crossfade', asyncHandler(async (req, res) => {
+  await sonos.setCrossfade(req.params.room, req.body.enabled);
+  res.json({ ok: true });
+}));
+
+app.post('/api/sonos/room/:room/sleeptimer', asyncHandler(async (req, res) => {
+  await sonos.setSleepTimer(req.params.room, req.body.minutes);
+  res.json({ ok: true });
+}));
+
+app.get('/api/sonos/room/:room/settings', asyncHandler(async (req, res) => {
+  const settings = await sonos.getRoomSettings(req.params.room);
+  res.json(settings);
+}));
+
+app.post('/api/sonos/room/:room/bass', asyncHandler(async (req, res) => {
+  await sonos.setBass(req.params.room, req.body.value);
+  res.json({ ok: true });
+}));
+
+app.post('/api/sonos/room/:room/treble', asyncHandler(async (req, res) => {
+  await sonos.setTreble(req.params.room, req.body.value);
+  res.json({ ok: true });
+}));
+
+app.post('/api/sonos/room/:room/loudness', asyncHandler(async (req, res) => {
+  await sonos.setLoudness(req.params.room, req.body.enabled);
+  res.json({ ok: true });
+}));
+
 // ---------------- Boot ----------------
 
 async function main() {

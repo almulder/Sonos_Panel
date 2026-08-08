@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
 <title>Sonos Panel</title>
 <link rel="manifest" href="manifest.json" />
-<link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+<link rel="icon" href="icons/app-icon.png" type="image/png" />
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
 <meta name="theme-color" content="#14181a" />
 <!-- mobile-web-app-capable is the modern, cross-browser standard for
@@ -49,6 +49,13 @@
 
             <div class="nowplaying" id="sonosNowPlaying">
               <button class="nowplaying__fullscreen-btn" id="sonosFullscreenBtn" aria-label="Full screen">&#x2922;</button>
+              <div class="sleeptimer" id="sonosSleepTimerWrap">
+                <button class="sleeptimer__btn" id="sonosSleepTimerBtn" aria-label="Sleep timer">
+                  <img src="icons/sleep-timer.png" alt="" class="sleeptimer__icon" />
+                  <span class="sleeptimer__badge" id="sonosSleepTimerBadge" style="display: none;"></span>
+                </button>
+                <ul class="sleeptimer__menu" id="sonosSleepTimerMenu" style="display: none;"></ul>
+              </div>
               <div class="nowplaying__art" id="sonosArt"></div>
               <div class="nowplaying__body">
                 <div class="nowplaying__info">
@@ -58,11 +65,13 @@
                   <p class="nowplaying__artist" id="sonosArtist">&nbsp;</p>
                 </div>
                 <div class="progress">
+                  <button class="progress__shuffle" id="sonosShuffleBtn" aria-label="Shuffle" aria-pressed="false">&#x1F500;</button>
                   <span class="progress__time" id="sonosElapsed">0:00</span>
                   <div class="progress__track" id="sonosProgressTrack">
                     <div class="progress__fill" id="sonosProgressFill"></div>
                   </div>
                   <span class="progress__time" id="sonosRemaining">-0:00</span>
+                  <button class="progress__crossfade" id="sonosCrossfadeBtn" aria-label="Crossfade" aria-pressed="false">&#x1F501;</button>
                 </div>
               </div>
               <div class="transport">

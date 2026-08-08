@@ -13,8 +13,41 @@ you add the real one.
 STATUS KEY: [x] = icon already included   [ ] = needs to be added
 
 Special files (not a streaming service):
-[x] default.png    -- fallback icon used when a service's icon is missing
-[x] sonos.png       -- used for the "Playlists" category itself
+[x] default.png            -- fallback icon used when a service's icon is missing
+[x] source-playlist.png    -- used for the "Playlists" category itself
+[x] source-linein.png      -- generic Line-In category icon, and the
+                               fallback used by any Line-In device name
+                               below that doesn't match a specific icon
+[x] app-icon.png           -- shared icon for the Sonos tab, the app's
+                               browser favicon, and the Docker/Unraid
+                               template icon (all three intentionally
+                               use this same file)
+[x] icon-192.png           -- PWA manifest icon, 192x192 (same design
+                               as app-icon.png, resized -- required by
+                               the manifest spec as its own file)
+[x] icon-512.png           -- PWA manifest icon, 512x512 (same design
+                               as app-icon.png)
+[x] sleep-timer.png        -- sleep timer icon (fullscreen now-playing view)
+[x] eq-settings.png        -- per-room EQ/settings icon (room list)
+
+Line-In device icons (shown next to the device name wherever it
+appears -- Now Playing artist line, and the Sources browsing panel):
+[x] linein-airplay.png           -- "Airplay Device"
+[x] linein-audiocomponent.png    -- "Audio Component"
+[x] linein-cdplayer.png          -- "CD Player"
+[x] linein-computer.png          -- "Computer"
+[x] linein-hometheater.png       -- "Home Theater"
+[x] linein-maccomputer.png       -- "Mac Computer"
+[x] linein-portableplayer.png    -- "Portable Player"
+[x] linein-receiver.png          -- "Receiver"
+[x] linein-satellitereceiver.png -- "Satellite Receiver"
+[x] linein-turntable.png         -- "Turntable"
+Falls back to source-linein.png if a Line-In device reports a name
+that doesn't match any of the above.
+
+All of the [x] icons above marked as new are simple placeholder
+line-art generated programmatically, not final artwork -- replace any
+of them by saving a PNG with the exact same filename into this folder.
 
 Streaming / audio services (your requested list):
 [ ] 7digital.png              -- 7digital

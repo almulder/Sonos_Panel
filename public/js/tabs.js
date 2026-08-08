@@ -129,7 +129,7 @@ const Tabs = (() => {
       id: 'sonos',
       title: 'Sonos',
       color: 'var(--amber)',
-      icon: 'icons/tab-icon-sonos.svg'
+      icon: 'icons/app-icon.png'
     }));
 
     // Slots 2-4: fill with configured tabs, pad the rest with blank
