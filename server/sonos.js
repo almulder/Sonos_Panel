@@ -603,10 +603,22 @@ async function getCachedPlaylistTrackByUri(roomName, playlistId, uri) {
 // library's actual behavior. Defaults to "shuffle available" for
 // anything unrecognized, since a wrongly-enabled button is a much
 // smaller problem than a wrongly-greyed-out one on legitimate content.
-const NO_SHUFFLE_URI_PREFIXES = ['x-sonosapi-radio:', 'x-sonosapi-stream:', 'x-sonosapi-hls:', 'x-rincon-mp3radio:', 'x-rincon-stream:'];
-function isShuffleAvailable(uri) {
-  if (!uri) return true;
-  return !NO_SHUFFLE_URI_PREFIXES.some((prefix) => uri.startsWith(prefix));
+// Shuffle only makes sense for actual queue-based playback (a playlist
+// or the local library queue) -- a Favorite playing a continuous
+// stream/radio station has no queue to shuffle at all. Rather than
+// trying to maintain a denylist of every streaming service's URI
+// scheme (there are dozens, and an unrecognized one would incorrectly
+// leave shuffle enabled), this checks for POSITIVE confirmation
+// instead: either we know for certain this room is mid-playlist
+// (roomPlaylistContext, set by our own playPlaylistTrack) or the
+// current URI is a direct queue reference (x-rincon-queue:, used for
+// local library/queue playback). Anything else defaults to
+// unavailable -- a rare false negative (shuffle disabled on some
+// pre-existing queue playback we didn't initiate) is a much smaller
+// problem than the reported bug (shuffle wrongly enabled on a stream).
+function isShuffleAvailable(uri, roomName) {
+  if (roomPlaylistContext.has(roomName)) return true;
+  return !!(uri && uri.startsWith('x-rincon-queue:'));
 }
 
 // Sonos combines shuffle+repeat into one enum rather than two
@@ -739,7 +751,7 @@ async function getNowPlaying(roomName) {
       duration: track.duration || 0,
       playMode,
       shuffleOn,
-      shuffleAvailable: isShuffleAvailable(track.uri),
+      shuffleAvailable: isShuffleAvailable(track.uri, roomName),
       crossfadeOn,
       sleepTimerRemainingSeconds,
       sourceLine

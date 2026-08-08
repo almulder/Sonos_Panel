@@ -755,12 +755,12 @@ button {
   transition: background-color 0.15s ease;
 }
 .progress__icon--shuffle {
-  -webkit-mask-image: url('icons/icon-shuffle.svg');
-  mask-image: url('icons/icon-shuffle.svg');
+  -webkit-mask-image: url('../icons/icon-shuffle.svg');
+  mask-image: url('../icons/icon-shuffle.svg');
 }
 .progress__icon--crossfade {
-  -webkit-mask-image: url('icons/icon-crossfade.svg');
-  mask-image: url('icons/icon-crossfade.svg');
+  -webkit-mask-image: url('../icons/icon-crossfade.svg');
+  mask-image: url('../icons/icon-crossfade.svg');
 }
 
 /* Disabled (shuffle only, e.g. on a stream/favorite) -- almost black,
