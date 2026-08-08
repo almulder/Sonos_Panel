@@ -491,10 +491,43 @@ const DEVICE_CALL_TIMEOUT_MS = 3000;
 // NOTE: this filters only the OUTPUT. lastRoomsByName deliberately
 // keeps its full set including unreachable rooms, since that's what
 // lets a reconnecting room be noticed and come back automatically.
+// A deliberate ungroup should stick, even if some other source
+// briefly insists otherwise. Sonos's own topology keeps re-reporting a
+// group for a while after a member leaves (especially when the group
+// also contains a ghost/unplugged member), and there are three
+// independent things that read that topology and write it back as
+// truth -- the regular poll, the targeted poll, and the live
+// ZonesChanged event. Rather than trying to guard each one separately,
+// this records the intent for a few seconds and enforces it at the
+// single point where rooms are handed to the client. Cleared early if
+// the room is deliberately grouped again, so re-grouping is never
+// blocked by it.
+const UNGROUP_INTENT_MS = 10000;
+const recentlyUngrouped = new Map(); // roomName -> expiry timestamp
+
+function noteUngroupIntent(roomName) {
+  recentlyUngrouped.set(roomName, Date.now() + UNGROUP_INTENT_MS);
+}
+function clearUngroupIntent(roomName) {
+  recentlyUngrouped.delete(roomName);
+}
+function hasActiveUngroupIntent(roomName) {
+  const expiry = recentlyUngrouped.get(roomName);
+  if (!expiry) return false;
+  if (Date.now() > expiry) {
+    recentlyUngrouped.delete(roomName);
+    return false;
+  }
+  return true;
+}
+
 function sanitizeRoomsForClient(rooms) {
   const live = rooms.filter((r) => r.reachable !== false);
   const liveNames = new Set(live.map((r) => r.name));
-  return live.map((r) => (liveNames.has(r.coordinator) ? r : { ...r, coordinator: r.name }));
+  return live.map((r) => {
+    if (hasActiveUngroupIntent(r.name)) return { ...r, coordinator: r.name };
+    return liveNames.has(r.coordinator) ? r : { ...r, coordinator: r.name };
+  });
 }
 
 async function probeReachable(device, name) {
@@ -1137,6 +1170,10 @@ async function groupRooms(roomNames) {
     return { succeeded: members, failed: [], dissolved: [] };
   }
   const dissolved = await resolveGroupConflicts(roomNames);
+  // Deliberately grouping these rooms overrides any recent ungroup
+  // intent for them -- otherwise re-grouping a room you just ungrouped
+  // would appear to do nothing until the window expired.
+  roomNames.forEach(clearUngroupIntent);
   const [coordinatorName, ...members] = roomNames;
   // Promise.allSettled, not Promise.all: a saved group with one
   // unreachable room (unplugged, rebooting, Wi-Fi hiccup) shouldn't
@@ -1203,6 +1240,7 @@ function getLastKnownRooms() {
 }
 
 async function ungroupRoom(roomName) {
+  noteUngroupIntent(roomName);
   if (usingMock) {
     const room = mockState.rooms.find((r) => r.name === roomName);
     if (room) room.coordinator = roomName;

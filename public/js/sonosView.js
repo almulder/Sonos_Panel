@@ -432,6 +432,27 @@ const SonosView = (() => {
     return best || selectedNames[0];
   }
 
+  // Checking a room that's already in a group means "include that whole
+  // group", not just that one room. Without this, selecting a group's
+  // coordinator plus one new room sends only those two names to the
+  // server -- and since applying a group dissolves any group it
+  // overlaps with (by design, so rooms can't end up in two groups at
+  // once), every other member got dropped and the result collapsed to
+  // exactly two rooms every time. Expanding here keeps that dissolve
+  // behavior correct while letting groups actually grow.
+  function expandSelectionToFullGroups(names) {
+    const expanded = new Set();
+    names.forEach((name) => {
+      expanded.add(name);
+      const room = rooms.find((r) => r.name === name);
+      const coordinator = room ? room.coordinator : name;
+      rooms.forEach((r) => {
+        if (r.coordinator === coordinator) expanded.add(r.name);
+      });
+    });
+    return [...expanded];
+  }
+
   async function toggleGroupSelection(roomName) {
     if (pendingGroupSelection.has(roomName)) {
       pendingGroupSelection.delete(roomName);
@@ -441,8 +462,12 @@ const SonosView = (() => {
     pendingGroupSelection.add(roomName);
     if (pendingGroupSelection.size >= 2) {
       const selected = Array.from(pendingGroupSelection);
+      // Anchor is chosen from what was actually CHECKED (which prefers
+      // an existing coordinator), then the full membership is folded in
+      // around it.
       const anchor = chooseGroupAnchor(selected);
-      const ordered = [anchor, ...selected.filter((n) => n !== anchor)];
+      const full = expandSelectionToFullGroups(selected);
+      const ordered = [anchor, ...full.filter((n) => n !== anchor)];
       await api('/api/sonos/group', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
