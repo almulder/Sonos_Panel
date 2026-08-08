@@ -820,98 +820,117 @@ const MUSIC_LIBRARY_CATEGORIES = [
   { id: 'S:', title: 'Folders' }
 ];
 // ---------------------------------------------------------------------
-// Playlist write probe (throwaway / diagnostic)
+// Sonos Playlist management (SQ:)
 //
-// Sonos Playlists (SQ:) can be created and appended to over the local
-// API -- unlike Imported Playlists (A:PLAYLISTS), which are M3U files
-// on the share that Sonos only indexes read-only.
+// Sonos Playlists can be created and edited over the local API. This is
+// specifically NOT true of Imported Playlists (A:PLAYLISTS), which are
+// M3U files on the share that Sonos only indexes read-only -- not
+// editable from here or from the official app.
 //
-// The open question this answers: which metadata does AddURIToSavedQueue
-// actually accept for a local library track? The library's own
-// addToPlaylist() auto-generates generic metadata, and this project has
-// already been burned once by that -- auto-generated metadata was
-// rejected with a UPnP 501 during playback work, and passing the item's
-// own r:resMD was what fixed it. So this deliberately tries BOTH and
-// reports each result rather than assuming.
-//
-// Creates a real playlist named "ZZ Panel Test" that shows up in the
-// Sonos app. Remove it with deleteProbePlaylist() when done.
-async function playlistWriteProbe() {
-  const steps = [];
-  const device = devicesByName.values().next().value;
-  if (!device) return { ok: false, steps: [{ step: 'find device', ok: false }] };
+// Verified against real hardware before building: for local library
+// tracks, the library's own addToPlaylist() (which auto-generates
+// metadata) is accepted, and so is passing the item's own r:resMD even
+// when it's empty. Local files carry everything Sonos needs in the
+// x-file-cifs:// URI itself. Service-backed items (Pandora, Plex, etc.)
+// are the known risk here -- auto-generated metadata has been rejected
+// with a UPnP 501 for those before, during the playback work -- so
+// addUriToPlaylist reports failures rather than swallowing them.
 
-  // 1. Grab a real track from the music library to work with.
-  const { items } = await browseContainerPaged(null, 'A:TRACKS', 0, 1);
-  const track = items && items[0];
-  steps.push({
-    step: 'browse A:TRACKS for a sample track',
-    ok: !!(track && track.uri),
-    title: track ? track.title : null,
-    uri: track ? track.uri : null,
-    hasOwnMetadata: !!(track && track.metadata)
+// Playlist writes change what a subsequent browse should return, so the
+// cached copies have to go or the UI shows a stale list right after an
+// edit.
+function invalidateContainerCache(prefix) {
+  [...containerItemsCache.keys()].forEach((key) => {
+    if (key.startsWith(prefix)) containerItemsCache.delete(key);
   });
-  if (!track || !track.uri) return { ok: false, steps };
-
-  // 2. Create the playlist.
-  let assignedObjectId = null;
-  try {
-    const created = await device.createPlaylist('ZZ Panel Test');
-    assignedObjectId = created.AssignedObjectID;
-    steps.push({ step: 'createPlaylist("ZZ Panel Test")', ok: !!assignedObjectId, assignedObjectId });
-  } catch (err) {
-    steps.push({ step: 'createPlaylist("ZZ Panel Test")', ok: false, error: err.message });
-    return { ok: false, steps };
-  }
-  if (!assignedObjectId) return { ok: false, steps };
-  const playlistId = String(assignedObjectId).replace(/^SQ:/, '');
-
-  // 3a. Attempt A -- the library's own helper (auto-generated metadata).
-  try {
-    const r = await device.addToPlaylist(playlistId, track.uri);
-    steps.push({ step: 'addToPlaylist() [auto-generated metadata]', ok: Number(r.NumTracksAdded) > 0, result: r });
-  } catch (err) {
-    steps.push({ step: 'addToPlaylist() [auto-generated metadata]', ok: false, error: err.message });
-  }
-
-  // 3b. Attempt B -- raw action, passing the track's OWN r:resMD, which
-  // is what made playback work correctly for service-backed items.
-  try {
-    const current = await device.getPlaylist(playlistId);
-    const r = await device.avTransportService().AddURIToSavedQueue({
-      InstanceID: 0,
-      ObjectID: `SQ:${playlistId}`,
-      UpdateID: current.updateID,
-      EnqueuedURI: Helpers.EncodeXml(track.uri),
-      EnqueuedURIMetaData: Helpers.EncodeXml(track.metadata || ''),
-      AddAtIndex: 4294967295
-    });
-    steps.push({ step: "AddURIToSavedQueue [track's own r:resMD]", ok: Number(r.NumTracksAdded) > 0, result: r });
-  } catch (err) {
-    steps.push({ step: "AddURIToSavedQueue [track's own r:resMD]", ok: false, error: err.message });
-  }
-
-  // 4. Read it back -- the only real proof anything landed.
-  try {
-    const verify = await browseContainerPaged(null, `SQ:${playlistId}`, 0, 50);
-    steps.push({
-      step: 'read back playlist contents',
-      ok: verify.items.length > 0,
-      trackCount: verify.items.length,
-      titles: verify.items.map((i) => i.title)
-    });
-  } catch (err) {
-    steps.push({ step: 'read back playlist contents', ok: false, error: err.message });
-  }
-
-  return { ok: true, playlistId, assignedObjectId, steps };
 }
 
-async function deleteProbePlaylist(playlistId) {
-  const device = devicesByName.values().next().value;
-  if (!device) return { ok: false };
-  const deleted = await device.deletePlaylist(playlistId);
-  return { ok: deleted };
+function anyDevice() {
+  return devicesByName.values().next().value || null;
+}
+
+// Strips the "SQ:" namespace -- browse returns ids like "SQ:3", but the
+// playlist helpers all expect just the numeric part.
+function barePlaylistId(id) {
+  return String(id).replace(/^SQ:/, '');
+}
+
+async function createSonosPlaylist(title) {
+  if (usingMock) return { id: 'SQ:mock-new', title };
+  const device = anyDevice();
+  if (!device) throw new Error('No Sonos device available');
+  const created = await device.createPlaylist(title);
+  if (!created.AssignedObjectID) throw new Error('Sonos did not return a playlist id');
+  invalidateContainerCache('SQ:');
+  return { id: created.AssignedObjectID, title };
+}
+
+async function deleteSonosPlaylist(playlistId) {
+  if (usingMock) return true;
+  const device = anyDevice();
+  if (!device) return false;
+  const ok = await device.deletePlaylist(barePlaylistId(playlistId));
+  invalidateContainerCache('SQ:');
+  return ok;
+}
+
+async function addUriToPlaylist(playlistId, uri) {
+  if (usingMock) return { added: 1 };
+  const device = anyDevice();
+  if (!device) throw new Error('No Sonos device available');
+  const result = await device.addToPlaylist(barePlaylistId(playlistId), uri);
+  invalidateContainerCache(`SQ:${barePlaylistId(playlistId)}`);
+  invalidateContainerCache('SQ:');
+  if (Number(result.NumTracksAdded) < 1) {
+    // Deliberately surfaced rather than silently ignored -- this is
+    // exactly where a service-backed item would fail if its metadata
+    // isn't acceptable, and silently "succeeding" would be worse.
+    throw new Error('Sonos accepted the request but added no track');
+  }
+  return { added: Number(result.NumTracksAdded), length: Number(result.NewQueueLength) };
+}
+
+// Adding a whole album/container: browse it, then add each playable
+// track in order. Sequential on purpose -- each AddURIToSavedQueue
+// depends on the playlist's current UpdateID, so firing them in
+// parallel would race and drop tracks.
+async function addContainerToPlaylist(roomName, playlistId, containerId) {
+  if (usingMock) return { added: 0, failed: 0 };
+  const { items } = await browseContainerPaged(roomName, containerId, 0, 200);
+  const tracks = items.filter((i) => !i.browsable && i.uri);
+  let added = 0;
+  const failed = [];
+  for (const track of tracks) {
+    try {
+      await addUriToPlaylist(playlistId, track.uri);
+      added += 1;
+    } catch (err) {
+      failed.push(track.title);
+      debugLog.warn('sonos', `addContainerToPlaylist: "${track.title}" failed -- ${err.message}`);
+    }
+  }
+  return { added, failed };
+}
+
+async function removeTrackFromPlaylist(playlistId, index) {
+  if (usingMock) return { removed: 1 };
+  const device = anyDevice();
+  if (!device) throw new Error('No Sonos device available');
+  const result = await device.removeFromPlaylist(barePlaylistId(playlistId), String(index));
+  invalidateContainerCache(`SQ:${barePlaylistId(playlistId)}`);
+  invalidateContainerCache('SQ:');
+  return { removed: Math.abs(Number(result.QueueLengthChange) || 0), length: Number(result.NewQueueLength) };
+}
+
+// Snapshot whatever a room is currently playing through as a new
+// playlist -- Sonos's own "save queue" feature.
+async function saveQueueAsPlaylist(roomName, title) {
+  if (usingMock) return { id: 'SQ:mock-saved', title };
+  const device = findDevice(roomName);
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  const result = await device.avTransportService().SaveQueue({ InstanceID: 0, Title: title, ObjectID: '' });
+  invalidateContainerCache('SQ:');
+  return { id: result.AssignedObjectID || null, title };
 }
 
 function getMusicLibraryCategories() {
@@ -1973,8 +1992,12 @@ module.exports = {
   browseContainer,
   getContainerPage,
   getMusicLibraryCategories,
-  playlistWriteProbe,
-  deleteProbePlaylist,
+  createSonosPlaylist,
+  deleteSonosPlaylist,
+  addUriToPlaylist,
+  addContainerToPlaylist,
+  removeTrackFromPlaylist,
+  saveQueueAsPlaylist,
   getCachedContainerItems,
   playItem,
   playPlaylistTrack,

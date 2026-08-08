@@ -1450,6 +1450,133 @@ const SonosView = (() => {
     });
   }
 
+  // ---------------- Add to playlist ----------------
+  // Shared picker: lists existing Sonos Playlists plus a "New
+  // playlist" option. Used from music library rows (a single track or
+  // a whole album) -- the caller just hands over a payload describing
+  // what to add.
+  let playlistPickerEl = null;
+  function buildPlaylistPicker() {
+    const overlay = document.createElement('div');
+    overlay.className = 'roomsettings-overlay';
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.style.display = 'none';
+    });
+    const sheet = document.createElement('div');
+    sheet.className = 'roomsettings-sheet';
+    const header = document.createElement('div');
+    header.className = 'roomsettings-sheet__header';
+    const title = document.createElement('h3');
+    title.className = 'roomsettings-sheet__title';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'roomsettings-sheet__close';
+    closeBtn.textContent = '\u2715';
+    closeBtn.addEventListener('click', () => { overlay.style.display = 'none'; });
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+    sheet.appendChild(header);
+    const list = document.createElement('div');
+    list.className = 'savegroup-checklist';
+    sheet.appendChild(list);
+    const status = document.createElement('p');
+    status.className = 'playlistpicker__status';
+    sheet.appendChild(status);
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+    return { overlay, title, list, status };
+  }
+
+  async function openPlaylistPicker(label, payload) {
+    if (!playlistPickerEl) playlistPickerEl = buildPlaylistPicker();
+    const { overlay, title, list, status } = playlistPickerEl;
+    title.textContent = `Add "${label}" to\u2026`;
+    status.textContent = '';
+    overlay.style.display = 'flex';
+    list.innerHTML = '<div class="savegroup-checking">Loading playlists\u2026</div>';
+
+    const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/playlists`);
+    const playlists = data.playlists || [];
+    list.innerHTML = '';
+
+    async function addTo(playlistId) {
+      status.textContent = 'Adding\u2026';
+      const result = await api(`/api/sonos/playlists/${encodeURIComponent(playlistId)}/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, room: focusedRoom })
+      });
+      if (result && result.error) {
+        status.textContent = `Couldn't add: ${result.error}`;
+        return;
+      }
+      // A container add reports per-track results, since some tracks
+      // can fail individually (see addContainerToPlaylist server-side).
+      if (typeof result.failed !== 'undefined' && Array.isArray(result.failed) && result.failed.length > 0) {
+        status.textContent = `Added ${result.added}, ${result.failed.length} failed`;
+      } else {
+        status.textContent = 'Added.';
+      }
+      setTimeout(() => { overlay.style.display = 'none'; }, 900);
+    }
+
+    const newRow = document.createElement('div');
+    newRow.className = 'savegroup-checkrow playlistpicker__new';
+    newRow.textContent = '+  New playlist\u2026';
+    newRow.addEventListener('click', () => {
+      list.innerHTML = '';
+      const wrap = document.createElement('div');
+      wrap.className = 'roomsettings-sheet__row';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'savegroup-nameinput';
+      // Prefilled so this still works with taps alone on a kiosk
+      // tablet where the on-screen keyboard may not appear.
+      input.value = label;
+      const go = document.createElement('button');
+      go.className = 'savegroup-savebtn';
+      go.textContent = 'Create and add';
+      go.addEventListener('click', async () => {
+        const name = input.value.trim();
+        if (!name) return;
+        status.textContent = 'Creating\u2026';
+        const created = await api('/api/sonos/playlists', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: name })
+        });
+        if (!created || !created.playlist) {
+          status.textContent = "Couldn't create that playlist";
+          return;
+        }
+        await addTo(created.playlist.id);
+      });
+      wrap.appendChild(input);
+      wrap.appendChild(go);
+      list.appendChild(wrap);
+    });
+    list.appendChild(newRow);
+
+    playlists.forEach((pl) => {
+      const row = document.createElement('div');
+      row.className = 'savegroup-checkrow';
+      row.textContent = pl.title;
+      row.addEventListener('click', () => addTo(pl.id));
+      list.appendChild(row);
+    });
+  }
+
+  function buildAddToPlaylistButton(label, payload) {
+    const btn = document.createElement('button');
+    btn.className = 'sourcepanel__addbtn';
+    btn.textContent = '+';
+    btn.setAttribute('aria-label', `Add ${label} to a playlist`);
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPlaylistPicker(label, payload);
+    });
+    return btn;
+  }
+
   // ---------------- Music Library browsing ----------------
   // The Music Library is genuinely recursive (Artists -> an artist ->
   // their albums -> tracks), which renderLeafItems can't express -- it
@@ -1631,6 +1758,12 @@ const SonosView = (() => {
           updateBackButtonVisibility();
           showLibraryContainer(item.id, item.title, state.categoryId);
         });
+        // Albums (and any container of tracks) can be added wholesale.
+        // Skipped for the big index categories -- "add all of Artists"
+        // isn't a meaningful action.
+        if (state.categoryId !== state.containerId || state.categoryId === 'A:ALBUM') {
+          li.appendChild(buildAddToPlaylistButton(item.title, { containerId: item.id }));
+        }
       } else if (item.uri) {
         li.addEventListener('click', async () => {
           // Playing a track from inside an album should queue the whole
@@ -1657,6 +1790,7 @@ const SonosView = (() => {
           await openSourceGroups();
           setTimeout(refreshNowPlaying, 800);
         });
+        li.appendChild(buildAddToPlaylistButton(item.title, { uri: item.uri }));
       }
 
       sourcePanelItems.appendChild(li);
@@ -1678,9 +1812,11 @@ const SonosView = (() => {
     sourcePanelItems.innerHTML = '';
     if (items.length === 0) {
       sourcePanelItems.innerHTML = `<li class="sourcepanel__loading">${emptyMessage}</li>`;
+      // Even an empty playlist should still be deletable.
+      appendPlaylistDeleteRow(playlistContainerId, playlistTitle);
       return;
     }
-    items.forEach((item) => {
+    items.forEach((item, index) => {
       const li = document.createElement('li');
       li.className = 'sourcepanel__item';
 
@@ -1754,8 +1890,45 @@ const SonosView = (() => {
         }
       });
 
+      // Sonos Playlists are editable; Imported Playlists (M3U files on
+      // the share) are not, so the remove control only appears for SQ:.
+      if (playlistContainerId && String(playlistContainerId).startsWith('SQ:')) {
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'sourcepanel__removebtn';
+        removeBtn.textContent = '\u2715';
+        removeBtn.setAttribute('aria-label', `Remove ${item.title} from ${playlistTitle}`);
+        removeBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          removeBtn.textContent = '\u2026';
+          await api(`/api/sonos/playlists/${encodeURIComponent(playlistContainerId)}/track/${index}`, { method: 'DELETE' });
+          const data = await api(
+            `/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(playlistContainerId)}`
+          );
+          renderLeafItems(data.items || [], 'This playlist is empty.', playlistContainerId, playlistTitle);
+        });
+        li.appendChild(removeBtn);
+      }
+
       sourcePanelItems.appendChild(li);
     });
+
+    appendPlaylistDeleteRow(playlistContainerId, playlistTitle);
+  }
+
+  function appendPlaylistDeleteRow(playlistContainerId, playlistTitle) {
+    if (!playlistContainerId || !String(playlistContainerId).startsWith('SQ:')) return;
+    const li = document.createElement('li');
+    li.className = 'sourcepanel__item sourcepanel__deleterow';
+    li.textContent = `\u{1F5D1}\uFE0F  Delete "${playlistTitle}"`;
+    li.addEventListener('click', () => {
+      showConfirm(`Delete the playlist "${playlistTitle}"?`, async () => {
+        await api(`/api/sonos/playlists/${encodeURIComponent(playlistContainerId)}`, { method: 'DELETE' });
+        // Back out to the Playlists list -- what we were looking at no
+        // longer exists.
+        await openGroup({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true });
+      });
+    });
+    sourcePanelItems.appendChild(li);
   }
 
   sourceBackBtn.addEventListener('click', () => {

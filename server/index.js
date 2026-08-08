@@ -339,17 +339,45 @@ app.get('/api/sonos/room/:room/browse-container', asyncHandler(async (req, res) 
   res.json({ items, total, start });
 }));
 
-// Throwaway diagnostic -- see playlistWriteProbe() in sonos.js. Not
-// linked from the UI; intended to be hit directly while working out
-// whether playlist writing is viable.
-app.post('/api/sonos/playlist-probe', asyncHandler(async (req, res) => {
-  const result = await sonos.playlistWriteProbe();
+// ---------------- Sonos Playlist management ----------------
+// See the comment block above these functions in sonos.js for why this
+// only applies to Sonos Playlists (SQ:) and not Imported Playlists.
+
+app.post('/api/sonos/playlists', asyncHandler(async (req, res) => {
+  const title = (req.body.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'A playlist needs a name' });
+  const playlist = await sonos.createSonosPlaylist(title);
+  res.json({ playlist });
+}));
+
+app.delete('/api/sonos/playlists/:id', asyncHandler(async (req, res) => {
+  const ok = await sonos.deleteSonosPlaylist(req.params.id);
+  res.json({ ok });
+}));
+
+// Accepts either a single track (uri) or a whole album/container
+// (containerId) -- the UI offers "add to playlist" at both levels.
+app.post('/api/sonos/playlists/:id/add', asyncHandler(async (req, res) => {
+  const { uri, containerId, room } = req.body;
+  if (containerId) {
+    const result = await sonos.addContainerToPlaylist(room, req.params.id, containerId);
+    return res.json(result);
+  }
+  if (!uri) return res.status(400).json({ error: 'Provide either uri or containerId' });
+  const result = await sonos.addUriToPlaylist(req.params.id, uri);
   res.json(result);
 }));
 
-app.delete('/api/sonos/playlist-probe/:id', asyncHandler(async (req, res) => {
-  const result = await sonos.deleteProbePlaylist(req.params.id);
+app.delete('/api/sonos/playlists/:id/track/:index', asyncHandler(async (req, res) => {
+  const result = await sonos.removeTrackFromPlaylist(req.params.id, parseInt(req.params.index, 10));
   res.json(result);
+}));
+
+app.post('/api/sonos/room/:room/save-queue', asyncHandler(async (req, res) => {
+  const title = (req.body.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'A playlist needs a name' });
+  const playlist = await sonos.saveQueueAsPlaylist(req.params.room, title);
+  res.json({ playlist });
 }));
 
 app.get('/api/sonos/room/:room/music-library', asyncHandler(async (req, res) => {

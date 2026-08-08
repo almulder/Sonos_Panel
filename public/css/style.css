@@ -1235,6 +1235,44 @@ button {
   color: var(--text-dim);
 }
 
+.sourcepanel__addbtn,
+.sourcepanel__removebtn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+}
+.sourcepanel__addbtn {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  font-size: 18px;
+}
+.sourcepanel__deleterow {
+  justify-content: center;
+  color: #e0685c;
+  font-family: var(--font-label);
+  font-size: 13px;
+  text-align: center;
+}
+.playlistpicker__new {
+  color: var(--amber);
+  font-weight: 700;
+}
+.playlistpicker__status {
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 13px;
+  text-align: center;
+  min-height: 18px;
+  margin: 10px 0 0;
+}
+
 .sourcepanel__art--letter {
   display: flex;
   align-items: center;
