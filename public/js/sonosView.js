@@ -172,7 +172,11 @@ const SonosView = (() => {
     // list re-renders mid-drag (innerHTML is fully rebuilt below) --
     // simplest fix is to just skip re-rendering while a drag is active
     // and catch up once it ends.
-    if (sliderDragActive) return;
+    if (sliderDragActive) {
+      console.log('[render diag] SKIPPED -- sliderDragActive is stuck true');
+      return;
+    }
+    console.log('[render diag] running, top-level rooms=%o', getTopLevelRooms().map((r) => r.name));
 
     // Size the name column to the widest room name actually present,
     // instead of letting it flex-stretch to fill all remaining width
@@ -798,6 +802,11 @@ const SonosView = (() => {
     async refreshFromSocket(newRooms) {
       const newRoomsJson = JSON.stringify(newRooms);
       const changed = newRoomsJson !== lastRoomsJson;
+      console.log(
+        '[ws diag] changed=%s coordinators=%o',
+        changed,
+        newRooms.map((r) => `${r.name}->${r.coordinator}`)
+      );
       lastRoomsJson = newRoomsJson;
       rooms = newRooms;
       if (changed) render();
