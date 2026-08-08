@@ -728,25 +728,67 @@ button {
 
 .progress__shuffle,
 .progress__crossfade {
+  position: relative;
   width: 34px;
   height: 34px;
   flex-shrink: 0;
   border-radius: 50%;
-  border: 1px solid var(--divider);
-  background: var(--panel-raised);
-  font-size: 14px;
-  opacity: 0.6;
-  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.progress__shuffle.is-active,
-.progress__crossfade.is-active {
-  color: var(--amber);
-  border-color: var(--amber-dim);
-  opacity: 1;
+
+.progress__icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  /* Default = available-but-off: light grey. Disabled and active states
+     override this via the classes below. */
+  filter: brightness(0) invert(0.6);
+  transition: filter 0.15s ease;
+}
+
+/* Shuffle: dark grey when unavailable (e.g. on a stream/favorite),
+   light grey when available -- matches the request to visually tell
+   the two states apart at a glance, independent of on/off. */
+.progress__shuffle.is-disabled .progress__icon {
+  filter: brightness(0) invert(0.25);
 }
 .progress__shuffle.is-disabled {
-  opacity: 0.25;
   pointer-events: none;
+}
+/* Shuffle ON gets an amber tint, consistent with how every other
+   "active" indicator in the app (playing dot, active tab, focused
+   room) already uses amber. */
+.progress__shuffle.is-active .progress__icon {
+  filter: none;
+  -webkit-mask-image: url('icons/icon-shuffle.png');
+  mask-image: url('icons/icon-shuffle.png');
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  background-color: var(--amber);
+}
+
+/* Crossfade has no disabled state -- always the same light grey icon,
+   with a light grey dot appearing underneath when it's on, matching
+   how Sonos's own app indicates this. */
+.progress__crossfade-dot {
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.progress__crossfade.is-active .progress__crossfade-dot {
+  opacity: 1;
+  background: #cfcfcf;
 }
 
 /* ---------------------------------------------------------------------
@@ -754,8 +796,8 @@ button {
 --------------------------------------------------------------------- */
 .sleeptimer {
   position: absolute;
-  top: 14px;
-  right: 58px;
+  bottom: 14px;
+  right: 14px;
   z-index: 5;
 }
 
@@ -796,7 +838,7 @@ button {
 
 .sleeptimer__menu {
   position: absolute;
-  top: 46px;
+  bottom: 46px;
   right: 0;
   background: var(--panel-raised);
   border: 1px solid var(--divider);
