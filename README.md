@@ -149,11 +149,18 @@ multi-second fetch delay. Album art is also prefetched into the
 browser's cache in the background per source group, independently, so
 one slow/failing group can't block the others from loading.
 
-**Polling:** room state polls every 2 seconds normally; any
-volume/grouping action triggers a 5-second burst of faster (500ms)
-polling right after, so the room list visibly catches up quickly
-without polling speakers aggressively all the time (which risks
-overloading the hardware on some setups).
+**Polling:** room state polls every 2 seconds normally. Any playback,
+volume, or grouping action triggers a 5-second burst of faster (150ms)
+polling right after, so changes visibly catch up quickly. The burst is
+scoped to just the room(s) actually involved (or the whole bonded
+group, for a group-volume/group-mute action) rather than re-polling
+every speaker at the faster rate -- a single-room volume tweak on a
+9-room system only re-queries that one device, regardless of the
+faster interval, which is what makes a short interval safe rather than
+risking overloading the hardware. Grouping/ungrouping is the one
+exception: since it changes the topology itself (which can affect how
+other rooms display their group label), that burst does a full,
+untargeted poll instead.
 
 ## Contributing
 

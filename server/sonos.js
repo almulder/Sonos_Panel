@@ -56,6 +56,14 @@ let devicesByName = new Map();
 let displayNameByKey = new Map();
 let mockState = buildMockState();
 
+// Cache of the last full getRooms() result, keyed by room name, plus the
+// last known topology (roomName -> coordinatorName). Targeted polling
+// (see getRoomsTargeted) reads/writes this so it can return a complete
+// room list while only actually querying the devices that changed --
+// everyone else's entry is just whatever the last full poll saw.
+let lastRoomsByName = new Map();
+let lastCoordinatorMap = {};
+
 function buildMockState() {
   return {
     rooms: [
@@ -218,7 +226,19 @@ async function getCoordinatorMap() {
       map[member.ZoneName] = coordinatorName || member.ZoneName;
     });
   });
+  lastCoordinatorMap = map;
   return map;
+}
+
+// Every room name currently sharing a coordinator with roomName
+// (including roomName itself) -- i.e. its whole bonded group. Used to
+// decide which devices a group-volume/group-mute action needs to
+// re-poll, without an extra topology fetch (reads the cached map from
+// the last real getCoordinatorMap() call).
+function getGroupMemberNames(roomName) {
+  const coordinator = lastCoordinatorMap[roomName];
+  if (!coordinator) return [roomName];
+  return Object.keys(lastCoordinatorMap).filter((name) => lastCoordinatorMap[name] === coordinator);
 }
 
 async function getDeviceUUID(roomName) {
@@ -274,7 +294,55 @@ async function getRooms() {
       })
     );
     rooms.sort((a, b) => a.name.localeCompare(b.name));
+    lastRoomsByName = new Map(rooms.map((r) => [r.name, r]));
     return rooms;
+  });
+}
+
+// Fast-poll-burst variant: only re-queries the devices in targetRoomNames
+// (typically just the room you touched, or its whole group for a
+// group-volume/group-mute action) and merges the fresh results into the
+// last known full snapshot for everyone else. This is what makes it safe
+// to run the burst interval much faster than the normal cadence without
+// multiplying request load across every speaker -- a single-room volume
+// tweak on a 9-room system now touches 1 device instead of 9, regardless
+// of how short the burst interval is.
+//
+// Falls back to a full getRooms() if the cache is empty (e.g. right after
+// startup, before any normal-cadence poll has populated it yet) so a
+// burst can never return stale/incomplete data for rooms it's never
+// actually seen.
+async function getRoomsTargeted(targetRoomNames) {
+  if (usingMock) return getRooms();
+  if (lastRoomsByName.size === 0) return getRooms();
+
+  return guarded('getRoomsTargeted', async () => {
+    const targets = new Set(targetRoomNames);
+    const updates = await Promise.all(
+      [...devicesByName.entries()]
+        .filter(([key]) => targets.has(displayNameByKey.get(key) || key))
+        .map(async ([key, device]) => {
+          const name = displayNameByKey.get(key) || key;
+          let volume = 0;
+          let playing = false;
+          try {
+            volume = await device.getVolume();
+          } catch (err) {
+            debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
+          }
+          try {
+            const state = await device.getCurrentState();
+            playing = state === 'playing';
+          } catch (err) {
+            debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
+          }
+          const coordinator = lastCoordinatorMap[name] || name;
+          return { name, volume, playing, coordinator };
+        })
+    );
+
+    updates.forEach((room) => lastRoomsByName.set(room.name, room));
+    return [...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name));
   });
 }
 
@@ -1071,6 +1139,8 @@ function isMock() {
 module.exports = {
   init,
   getRooms,
+  getRoomsTargeted,
+  getGroupMemberNames,
   getNowPlaying,
   play,
   pause,
