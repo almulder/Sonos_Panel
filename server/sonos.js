@@ -593,11 +593,54 @@ async function groupRooms(roomNames) {
     return;
   }
   const [coordinatorName, ...members] = roomNames;
-  for (const memberName of members) {
-    const member = findDevice(memberName);
-    if (!member) continue;
-    await guarded(`groupRooms(${memberName} -> ${coordinatorName})`, () => member.joinGroup(coordinatorName));
+  // Parallel, not sequential: each member's joinGroup() is an independent
+  // call to that member's own device (pointing its AVTransportURI at the
+  // coordinator), not a shared write on the coordinator itself, so
+  // there's no real conflict in firing them all at once. Awaiting them
+  // one at a time in a loop was adding each member's full round-trip
+  // time on top of the last -- 3 members joining sequentially could take
+  // 3x as long as necessary before any of them even start actually
+  // syncing, even before accounting for Sonos's own settling time.
+  await Promise.all(
+    members.map((memberName) => {
+      const member = findDevice(memberName);
+      if (!member) return Promise.resolve();
+      return guarded(`groupRooms(${memberName} -> ${coordinatorName})`, () => member.joinGroup(coordinatorName));
+    })
+  );
+}
+
+// Immediately reflects an intended topology change in the cache, ahead
+// of the real poll confirming it -- Sonos's own join/leave settling can
+// take anywhere from under a second to (per Sonos's own community
+// reports) upwards of 15-30 seconds on a slow/congested network, which
+// is outside our control. Patching the cache now means the room list
+// visually updates the instant the action is requested rather than
+// waiting on that settling time; the full poll that follows (triggered
+// right after, in index.js) then corrects this if reality ends up
+// differing (e.g. a join actually failed).
+function patchCoordinatorOptimistically(roomNames, newCoordinatorName) {
+  if (usingMock) {
+    roomNames.forEach((name) => {
+      const room = mockState.rooms.find((r) => r.name === name);
+      if (room) room.coordinator = newCoordinatorName;
+    });
+    return;
   }
+  roomNames.forEach((name) => {
+    lastCoordinatorMap[name] = newCoordinatorName;
+    const existing = lastRoomsByName.get(name);
+    if (existing) lastRoomsByName.set(name, { ...existing, coordinator: newCoordinatorName });
+  });
+}
+
+// Synchronous, no network calls -- just whatever the cache currently
+// holds. Used for the immediate broadcast right after an optimistic
+// patch (see patchCoordinatorOptimistically), not for anything that
+// needs genuinely fresh data.
+function getLastKnownRooms() {
+  if (usingMock) return [...mockState.rooms].sort((a, b) => a.name.localeCompare(b.name));
+  return [...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function ungroupRoom(roomName) {
@@ -1141,6 +1184,8 @@ module.exports = {
   getRooms,
   getRoomsTargeted,
   getGroupMemberNames,
+  patchCoordinatorOptimistically,
+  getLastKnownRooms,
   getNowPlaying,
   play,
   pause,

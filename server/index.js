@@ -51,6 +51,18 @@ const POLL_INTERVAL_MS = 2000;
 // step down without the request-overlap/overload risk a much lower
 // number (e.g. 50ms) would carry across 9+ real devices.
 const SONOS_FAST_POLL_INTERVAL_MS = 150;
+// Separate, more conservative interval specifically for FULL polls
+// (grouping/ungrouping, which changes topology and needs every device
+// re-checked). This intentionally stays at the original safer cadence --
+// a full poll touches every device no matter how fast it's requested, so
+// it shouldn't run at the same tightened rate as a targeted poll that
+// only touches one or two.
+const SONOS_FULL_POLL_INTERVAL_MS = 500;
+
+// Lets route handlers push an update immediately (e.g. right after an
+// optimistic topology patch) instead of waiting for the next scheduled
+// poll tick. Set once main() creates the real broadcast function.
+let broadcastNow = null;
 
 // Brief burst of faster Sonos polling right after a room/volume/group
 // action, then back to the normal 2s cadence -- per request, room
@@ -66,7 +78,9 @@ const SONOS_FAST_POLL_INTERVAL_MS = 150;
 // ungrouping is the one exception -- topology itself changes, so those
 // two pass null (see below) to force a full untargeted poll, since a
 // grouping change can affect how OTHER rooms display their group label
-// too, not just the room that was tapped.
+// too, not just the room that was tapped. Full polls run at the more
+// conservative SONOS_FULL_POLL_INTERVAL_MS rather than the tightened
+// targeted one.
 const SONOS_FAST_POLL_BURST_MS = 5000;
 let sonosFastPollUntil = 0;
 // Two pieces of state, kept explicit rather than overloading one
@@ -215,6 +229,13 @@ app.post('/api/sonos/room/:room/group-mute', asyncHandler(async (req, res) => {
 
 app.post('/api/sonos/group', asyncHandler(async (req, res) => {
   await sonos.groupRooms(req.body.rooms);
+  const [coordinatorName] = req.body.rooms;
+  // Reflect the intended grouping immediately, rather than waiting on
+  // Sonos's own join-settling time (which can genuinely take several
+  // seconds) before the UI shows anything. The full poll triggered right
+  // after corrects this if reality ends up differing.
+  sonos.patchCoordinatorOptimistically(req.body.rooms, coordinatorName);
+  if (broadcastNow) broadcastNow();
   // Topology itself changed -- other rooms' displayed "coordinator"
   // label can shift too, not just the ones just grouped, so this needs
   // a full untargeted poll rather than a scoped one.
@@ -224,6 +245,9 @@ app.post('/api/sonos/group', asyncHandler(async (req, res) => {
 
 app.post('/api/sonos/room/:room/ungroup', asyncHandler(async (req, res) => {
   await sonos.ungroupRoom(req.params.room);
+  // Ungrouping makes a room its own coordinator again.
+  sonos.patchCoordinatorOptimistically([req.params.room], req.params.room);
+  if (broadcastNow) broadcastNow();
   // Same reasoning as /api/sonos/group above -- topology changed.
   triggerSonosFastPoll();
   res.json({ ok: true });
@@ -316,16 +340,27 @@ async function main() {
     });
   }
 
+  // Lets route handlers (see the optimistic patch in /api/sonos/group
+  // and .../ungroup) push the current cached room list immediately,
+  // rather than waiting for the next scheduled poll tick to pick it up.
+  broadcastNow = () => {
+    broadcast({ type: 'sonos:rooms', rooms: sonos.getLastKnownRooms() });
+  };
+
   function scheduleSonosPoll() {
     const burstActive = Date.now() < sonosFastPollUntil;
-    const interval = burstActive ? SONOS_FAST_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+    const useTargeted = burstActive && !sonosFastPollFullPoll && sonosFastPollTargets.size > 0;
+    const useFullBurst = burstActive && sonosFastPollFullPoll;
+    // Targeted bursts run at the tightened interval (they only touch 1-2
+    // devices); full bursts (grouping/ungrouping) run at the more
+    // conservative interval since they touch every device regardless of
+    // how fast they're ticking.
+    let interval = POLL_INTERVAL_MS;
+    if (useTargeted) interval = SONOS_FAST_POLL_INTERVAL_MS;
+    else if (useFullBurst) interval = SONOS_FULL_POLL_INTERVAL_MS;
+
     setTimeout(async () => {
       try {
-        // Only use the targeted (cheap) path during an active burst
-        // with specific rooms known -- the regular 2s cadence, and any
-        // burst triggered by a topology-changing action (group/
-        // ungroup), always does a full poll.
-        const useTargeted = burstActive && !sonosFastPollFullPoll && sonosFastPollTargets.size > 0;
         const rooms = useTargeted
           ? await sonos.getRoomsTargeted([...sonosFastPollTargets])
           : await sonos.getRooms();
