@@ -1494,8 +1494,11 @@ const SonosView = (() => {
     overlay.style.display = 'flex';
     list.innerHTML = '<div class="savegroup-checking">Loading playlists\u2026</div>';
 
+    // NOTE: this route responds with { items }, not { playlists } --
+    // reading the wrong key here was why the picker always showed an
+    // empty list.
     const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/playlists`);
-    const playlists = data.playlists || [];
+    const playlists = data.items || [];
     list.innerHTML = '';
 
     async function addTo(playlistId) {

@@ -845,6 +845,14 @@ function invalidateContainerCache(prefix) {
   });
 }
 
+// The Playlists list has its OWN cache (playlistsCache, 60s) separate
+// from the container cache -- clearing only the latter left a newly
+// created playlist invisible until that timer expired or the page was
+// reloaded. Any write has to drop both.
+function invalidatePlaylistsCache() {
+  playlistsCache = { items: null, at: 0, refreshing: false };
+}
+
 function anyDevice() {
   return devicesByName.values().next().value || null;
 }
@@ -862,6 +870,7 @@ async function createSonosPlaylist(title) {
   const created = await device.createPlaylist(title);
   if (!created.AssignedObjectID) throw new Error('Sonos did not return a playlist id');
   invalidateContainerCache('SQ:');
+  invalidatePlaylistsCache();
   return { id: created.AssignedObjectID, title };
 }
 
@@ -871,6 +880,7 @@ async function deleteSonosPlaylist(playlistId) {
   if (!device) return false;
   const ok = await device.deletePlaylist(barePlaylistId(playlistId));
   invalidateContainerCache('SQ:');
+  invalidatePlaylistsCache();
   return ok;
 }
 
@@ -881,6 +891,7 @@ async function addUriToPlaylist(playlistId, uri) {
   const result = await device.addToPlaylist(barePlaylistId(playlistId), uri);
   invalidateContainerCache(`SQ:${barePlaylistId(playlistId)}`);
   invalidateContainerCache('SQ:');
+  invalidatePlaylistsCache();
   if (Number(result.NumTracksAdded) < 1) {
     // Deliberately surfaced rather than silently ignored -- this is
     // exactly where a service-backed item would fail if its metadata
@@ -919,6 +930,7 @@ async function removeTrackFromPlaylist(playlistId, index) {
   const result = await device.removeFromPlaylist(barePlaylistId(playlistId), String(index));
   invalidateContainerCache(`SQ:${barePlaylistId(playlistId)}`);
   invalidateContainerCache('SQ:');
+  invalidatePlaylistsCache();
   return { removed: Math.abs(Number(result.QueueLengthChange) || 0), length: Number(result.NewQueueLength) };
 }
 
@@ -930,6 +942,7 @@ async function saveQueueAsPlaylist(roomName, title) {
   if (!device) throw new Error(`Room not found: ${roomName}`);
   const result = await device.avTransportService().SaveQueue({ InstanceID: 0, Title: title, ObjectID: '' });
   invalidateContainerCache('SQ:');
+  invalidatePlaylistsCache();
   return { id: result.AssignedObjectID || null, title };
 }
 
