@@ -132,6 +132,9 @@ function buildSourceIcon(group) {
 const SonosView = (() => {
   const roomListEl = document.getElementById('roomList');
   const roomlistPullIndicator = document.getElementById('roomlistPullIndicator');
+  const sourceSearchWrap = document.getElementById('sourceSearchWrap');
+  const sourceSearchInput = document.getElementById('sourceSearchInput');
+  const sourceSearchClear = document.getElementById('sourceSearchClear');
   const roomlistPanel = document.getElementById('sonosRoomlist');
   const roomlistLabel = document.getElementById('roomlistLabel');
   const roomlistBackBtn = document.getElementById('roomlistBackBtn');
@@ -1048,7 +1051,7 @@ const SonosView = (() => {
     playPauseBtn.textContent = currentlyPlaying ? '\u23F8' : '\u25B6';
 
     if (track && track.albumArtUrl) {
-      artEl.style.backgroundImage = `url(${track.albumArtUrl})`;
+      artEl.style.backgroundImage = `url("${track.albumArtUrl}")`;
       artEl.style.backgroundSize = 'cover';
     } else {
       artEl.style.backgroundImage = '';
@@ -1226,6 +1229,7 @@ const SonosView = (() => {
   }
 
   async function openSourceGroups() {
+    hideLibrarySearch();
     if (!focusedRoom) return;
     currentGroup = null;
     backStack = [];
@@ -1290,6 +1294,7 @@ const SonosView = (() => {
   }
 
   async function openGroup(group) {
+    hideLibrarySearch();
     backStack = [() => openSourceGroups()];
     updateBackButtonVisibility();
 
@@ -1456,6 +1461,7 @@ const SonosView = (() => {
   const MUSIC_LIBRARY_GROUP = { id: 'musiclibrary', title: 'Music Library', browsable: true, isMusicLibraryRoot: true };
 
   function renderLibraryCategories(categories) {
+    hideLibrarySearch();
     sourcePanelItems.innerHTML = '';
     if (categories.length === 0) {
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">No music library found. Add a music share in the Sonos app first.</li>';
@@ -1478,17 +1484,88 @@ const SonosView = (() => {
       li.addEventListener('click', () => {
         backStack.push(() => openGroup(MUSIC_LIBRARY_GROUP));
         updateBackButtonVisibility();
-        showLibraryContainer(cat.id, cat.title);
+        showLibraryContainer(cat.id, cat.title, cat.id);
       });
       sourcePanelItems.appendChild(li);
     });
   }
 
-  async function showLibraryContainer(containerId, title) {
+  // Search scope follows whichever category you're inside -- under
+  // Artists it searches artists, under Songs it searches songs. Sonos
+  // implements this as an ordinary Browse against "<category>:<term>",
+  // so it reuses the exact same paging/render path as normal browsing.
+  // Folders (S:) is excluded: that ObjectID is a filesystem path
+  // namespace, not a searchable index, so appending a term there is
+  // meaningless.
+  let librarySearchRoot = null;   // category ObjectID, or null when search is off
+  let librarySearchTitle = '';
+  let librarySearchTimer = null;
+
+  function isSearchableCategory(categoryId) {
+    return typeof categoryId === 'string' && categoryId.startsWith('A:') && categoryId !== 'A:PLAYLISTS';
+  }
+
+  function hideLibrarySearch() {
+    librarySearchRoot = null;
+    if (librarySearchTimer) clearTimeout(librarySearchTimer);
+    sourceSearchWrap.style.display = 'none';
+    sourceSearchInput.value = '';
+  }
+
+  function showLibrarySearch(categoryId, categoryTitle) {
+    librarySearchRoot = categoryId;
+    librarySearchTitle = categoryTitle;
+    sourceSearchInput.placeholder = `Search ${categoryTitle}`;
+    sourceSearchWrap.style.display = '';
+  }
+
+  async function runLibrarySearch(term) {
+    if (!librarySearchRoot) return;
+    const trimmed = term.trim();
+    if (trimmed === '') {
+      // Empty box means "show the whole category again".
+      await showLibraryContainer(librarySearchRoot, librarySearchTitle, librarySearchRoot, true);
+      return;
+    }
+    sourcePanelTitle.textContent = `${librarySearchTitle.toUpperCase()}: ${trimmed.toUpperCase()}`;
+    sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Searching\u2026</li>';
+    const searchId = `${librarySearchRoot}:${encodeURIComponent(trimmed)}`;
+    const state = { containerId: searchId, title: librarySearchTitle, categoryId: librarySearchRoot, items: [], total: 0, nextStart: 0 };
+    await loadLibraryPage(state);
+  }
+
+  sourceSearchInput.addEventListener('input', () => {
+    if (librarySearchTimer) clearTimeout(librarySearchTimer);
+    const term = sourceSearchInput.value;
+    // Debounced so typing doesn't fire a Browse per keystroke against a
+    // large library.
+    librarySearchTimer = setTimeout(() => runLibrarySearch(term), 400);
+  });
+  sourceSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      if (librarySearchTimer) clearTimeout(librarySearchTimer);
+      runLibrarySearch(sourceSearchInput.value);
+    }
+  });
+  sourceSearchClear.addEventListener('click', () => {
+    sourceSearchInput.value = '';
+    runLibrarySearch('');
+  });
+
+  async function showLibraryContainer(containerId, title, categoryId, keepSearchBox) {
     currentGroup = title;
     sourcePanelTitle.textContent = title.toUpperCase();
     sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
-    const state = { containerId, title, items: [], total: 0, nextStart: 0 };
+    // The search box stays put at the category level and disappears once
+    // you drill deeper (searching "albums by this artist" isn't a thing
+    // Sonos exposes) -- keepSearchBox is set when re-showing a category
+    // after clearing the box, so it isn't torn down mid-use.
+    if (isSearchableCategory(categoryId) && containerId === categoryId) {
+      if (!keepSearchBox) showLibrarySearch(categoryId, title);
+    } else {
+      hideLibrarySearch();
+    }
+    const state = { containerId, title, categoryId, items: [], total: 0, nextStart: 0 };
     await loadLibraryPage(state);
   }
 
@@ -1516,7 +1593,7 @@ const SonosView = (() => {
       const art = document.createElement('div');
       art.className = 'sourcepanel__art';
       if (item.albumArtUrl) {
-        art.style.backgroundImage = `url(${item.albumArtUrl})`;
+        art.style.backgroundImage = `url("${item.albumArtUrl}")`;
         art.style.backgroundSize = 'cover';
       }
       li.appendChild(art);
@@ -1541,9 +1618,9 @@ const SonosView = (() => {
         chevron.textContent = '\u203A';
         li.appendChild(chevron);
         li.addEventListener('click', () => {
-          backStack.push(() => showLibraryContainer(state.containerId, state.title));
+          backStack.push(() => showLibraryContainer(state.containerId, state.title, state.categoryId));
           updateBackButtonVisibility();
-          showLibraryContainer(item.id, item.title);
+          showLibraryContainer(item.id, item.title, state.categoryId);
         });
       } else if (item.uri) {
         li.addEventListener('click', async () => {
@@ -1610,7 +1687,7 @@ const SonosView = (() => {
         const art = document.createElement('div');
         art.className = 'sourcepanel__art';
         if (item.albumArtUrl) {
-          art.style.backgroundImage = `url(${item.albumArtUrl})`;
+          art.style.backgroundImage = `url("${item.albumArtUrl}")`;
           art.style.backgroundSize = 'cover';
         }
         li.appendChild(art);

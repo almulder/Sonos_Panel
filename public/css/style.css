@@ -1235,6 +1235,35 @@ button {
   color: var(--text-dim);
 }
 
+.sourcepanel__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  flex-shrink: 0;
+}
+.sourcepanel__searchinput {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--divider);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-label);
+  font-size: 14px;
+}
+.sourcepanel__searchclear {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 .sourcepanel__items {
   list-style: none;
   margin: 0;
