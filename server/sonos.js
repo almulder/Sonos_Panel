@@ -247,6 +247,7 @@ function findDevice(roomName) {
 // restart, with nothing to notice or self-heal it.
 function attachDeviceEventListeners(name, device) {
   device.on('PlayState', (state) => {
+    debugLog.info('sonos', `[timing] PlayState event for ${name} -> ${state} at ${Date.now()}`);
     try {
       const playing = state === 'playing';
       const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, coordinator: name };
@@ -529,6 +530,7 @@ async function getNowPlaying(roomName) {
   }
   const device = findDevice(roomName);
   if (!device) return null;
+  debugLog.info('sonos', `[timing] getNowPlaying(${roomName}) starting at ${Date.now()}`);
   try {
     const [track, state, playMode] = await Promise.all([
       device.currentTrack(),
@@ -538,6 +540,7 @@ async function getNowPlaying(roomName) {
         return 'NORMAL';
       })
     ]);
+    debugLog.info('sonos', `[timing] getNowPlaying(${roomName}) resolved at ${Date.now()} with state=${state}`);
 
     // Source line: identifies WHERE the audio is coming from, since
     // title/artist alone don't cover this -- confirmed useful in
@@ -614,7 +617,9 @@ async function play(roomName) {
   }
   const device = findDevice(roomName);
   if (!device) return;
+  debugLog.info('sonos', `[timing] play(${roomName}) SOAP call starting at ${Date.now()}`);
   await guarded(`play(${roomName})`, () => device.play());
+  debugLog.info('sonos', `[timing] play(${roomName}) SOAP call resolved at ${Date.now()}`);
 }
 
 async function pause(roomName) {
