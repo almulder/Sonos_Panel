@@ -1235,6 +1235,20 @@ button {
   color: var(--text-dim);
 }
 
+.sourcepanel__art--letter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--amber-dim);
+  border-radius: 6px;
+  color: var(--amber);
+  font-family: var(--font-label);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .sourcepanel__search {
   display: flex;
   align-items: center;

@@ -1595,6 +1595,15 @@ const SonosView = (() => {
       if (item.albumArtUrl) {
         art.style.backgroundImage = `url("${item.albumArtUrl}")`;
         art.style.backgroundSize = 'cover';
+      } else {
+        // Artists, composers, genres and folders have no artwork of
+        // their own -- Sonos doesn't return any for those container
+        // types, so rather than an empty tile these get a letter badge
+        // in the theme accent. Albums and tracks fall through to real
+        // artwork as normal.
+        art.classList.add('sourcepanel__art--letter');
+        const first = (item.title || '').trim().charAt(0).toUpperCase();
+        art.textContent = /[A-Z0-9]/.test(first) ? first : '#';
       }
       li.appendChild(art);
 

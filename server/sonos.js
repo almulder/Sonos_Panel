@@ -1485,14 +1485,7 @@ async function browseContainerPaged(roomName, containerId, start = 0, count = 20
     if (result.length === 0) {
       debugLog.warn('sonos', `browseContainer(${containerId}) returned 0 items -- either genuinely empty, or this ObjectID isn't valid for your system`);
     } else {
-      // Includes the resolved album-art URL for the first couple of
-      // entries -- artwork for local library content comes back as a
-      // relative /getaa path that has to be resolved against a speaker's
-      // own address, so this makes it obvious at a glance whether the
-      // URL is being built correctly or is simply absent from Sonos's
-      // response for this container type.
-      const artSample = result.slice(0, 2).map((r) => `${r.title}=${r.albumArtUrl || 'NO-ART'}`).join(' | ');
-      debugLog.info('sonos', `browseContainer(${containerId}) start=${start} -> ${result.length} of ${total} item(s); art: ${artSample}`);
+      debugLog.info('sonos', `browseContainer(${containerId}) start=${start} -> ${result.length} of ${total} item(s)`);
     }
     return { items: result, total };
   });
