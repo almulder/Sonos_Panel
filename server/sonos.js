@@ -789,6 +789,40 @@ async function getCachedContainerItems(roomName, containerId) {
   return items;
 }
 
+// Paged variant used by the browsing UI. Cache key includes the start
+// offset so page 2 of a big artist list doesn't overwrite page 1.
+async function getContainerPage(roomName, containerId, start = 0) {
+  const key = `${containerId}|${start}`;
+  const now = Date.now();
+  const cached = containerItemsCache.get(key);
+  if (cached && now - cached.at < CONTAINER_ITEMS_CACHE_MS) {
+    return { items: cached.items, total: cached.total };
+  }
+  const { items, total } = await browseContainerPaged(roomName, containerId, start, 200);
+  containerItemsCache.set(key, { items, total, at: now });
+  return { items, total };
+}
+
+// The Music Library is content Sonos indexes itself from a network
+// share you've added in the official app -- genuinely local data, so
+// unlike the streaming-service catalog (which lives in Sonos's cloud
+// account and isn't reachable from here) this is fully browsable over
+// the local API. These ObjectIDs are the same ones the official app
+// uses, and each drills down through the ordinary ContentDirectory
+// Browse recursion the rest of this module already handles.
+const MUSIC_LIBRARY_CATEGORIES = [
+  { id: 'A:ARTIST', title: 'Artists' },
+  { id: 'A:ALBUM', title: 'Albums' },
+  { id: 'A:COMPOSER', title: 'Composers' },
+  { id: 'A:GENRE', title: 'Genres' },
+  { id: 'A:TRACKS', title: 'Songs' },
+  { id: 'A:PLAYLISTS', title: 'Imported Playlists' },
+  { id: 'S:', title: 'Folders' }
+];
+function getMusicLibraryCategories() {
+  return MUSIC_LIBRARY_CATEGORIES.map((c) => ({ ...c, browsable: true }));
+}
+
 async function getCachedPlaylistTrackByUri(roomName, playlistId, uri) {
   try {
     const items = await getCachedContainerItems(roomName, playlistId);
@@ -1408,12 +1442,18 @@ function mapDidlNode(device, node, browsable, serviceMap) {
   };
 }
 
-async function browseContainer(roomName, containerId) {
+// Paged core. Sonos's Browse returns TotalMatches alongside the page,
+// which the old fixed-200 call was discarding -- fine for Favorites and
+// Playlists (small), but a real music library can run to tens of
+// thousands of entries, so callers need to know there's more and be
+// able to ask for the next slice.
+async function browseContainerPaged(roomName, containerId, start = 0, count = 200) {
   if (usingMock) {
-    return mockState.browse[containerId] || [];
+    const items = mockState.browse[containerId] || [];
+    return { items, total: items.length };
   }
   const device = findDevice(roomName) || devicesByName.values().next().value;
-  if (!device) return [];
+  if (!device) return { items: [], total: 0 };
 
   return guarded(`browseContainer(${containerId})`, async () => {
     const serviceMap = await loadServiceNameMap();
@@ -1421,8 +1461,8 @@ async function browseContainer(roomName, containerId) {
       ObjectID: containerId,
       BrowseFlag: 'BrowseDirectChildren',
       Filter: '*',
-      StartingIndex: '0',
-      RequestedCount: '200',
+      StartingIndex: String(start),
+      RequestedCount: String(count),
       SortCriteria: ''
     });
     const parsed = await Helpers.ParseXml(raw.Result);
@@ -1440,18 +1480,23 @@ async function browseContainer(roomName, containerId) {
     // to replicate), so they're filtered out entirely rather than shown
     // as rows that do nothing when tapped.
     const result = [...containers, ...leafItems].filter((it) => it.browsable || it.uri);
+    const total = parseInt(raw.TotalMatches, 10) || result.length;
 
     if (result.length === 0) {
       debugLog.warn('sonos', `browseContainer(${containerId}) returned 0 items -- either genuinely empty, or this ObjectID isn't valid for your system`);
     } else {
-      debugLog.info(
-        'sonos',
-        `browseContainer(${containerId}) -> ${result.length} item(s): ` +
-          result.map((r) => `[${r.browsable ? 'container' : 'item'} "${r.title}" service=${r.serviceLabel || 'unknown'} uri=${r.uri || 'none'}]`).join(', ')
-      );
+      debugLog.info('sonos', `browseContainer(${containerId}) start=${start} -> ${result.length} of ${total} item(s)`);
     }
-    return result;
+    return { items: result, total };
   });
+}
+
+// Unchanged signature for every existing caller (Favorites, Playlists,
+// playlist track lists) -- they're all small enough that the first page
+// is the whole thing.
+async function browseContainer(roomName, containerId) {
+  const { items } = await browseContainerPaged(roomName, containerId, 0, 200);
+  return items;
 }
 
 async function playItem(roomName, uri, metadata) {
@@ -1706,6 +1751,10 @@ async function getSourceGroups(roomName) {
     groups.unshift({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true });
   }
 
+  // Music Library pinned to the very top -- it's the only source here
+  // that's genuinely local content rather than a streaming service.
+  groups.unshift({ id: 'musiclibrary', title: 'Music Library', browsable: true, isMusicLibraryRoot: true });
+
   return groups;
 }
 
@@ -1827,6 +1876,8 @@ module.exports = {
   getPlaylists,
   getLineInRooms,
   browseContainer,
+  getContainerPage,
+  getMusicLibraryCategories,
   getCachedContainerItems,
   playItem,
   playPlaylistTrack,

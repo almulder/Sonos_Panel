@@ -331,8 +331,16 @@ app.get('/api/sonos/room/:room/playlists', asyncHandler(async (req, res) => {
 app.get('/api/sonos/room/:room/browse-container', asyncHandler(async (req, res) => {
   const containerId = req.query.id;
   if (!containerId) return res.status(400).json({ error: 'Missing required query param: id' });
-  const items = await sonos.getCachedContainerItems(req.params.room, containerId);
-  res.json({ items });
+  // start is optional -- omitted means page 0, so existing callers
+  // (playlist track lists) are unaffected. total lets the browsing UI
+  // know whether there's another page worth offering.
+  const start = parseInt(req.query.start, 10) || 0;
+  const { items, total } = await sonos.getContainerPage(req.params.room, containerId, start);
+  res.json({ items, total, start });
+}));
+
+app.get('/api/sonos/room/:room/music-library', asyncHandler(async (req, res) => {
+  res.json({ categories: sonos.getMusicLibraryCategories() });
 }));
 
 app.get('/api/sonos/linein-rooms', asyncHandler(async (req, res) => {

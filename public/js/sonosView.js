@@ -117,6 +117,9 @@ function iconFilenameForService(serviceLabel) {
 }
 
 function buildSourceIcon(group) {
+  if (group.isMusicLibraryRoot) {
+    return buildImgIconWithFallback('source-musiclibrary');
+  }
   if (group.isLineInRoot) {
     return buildImgIconWithFallback('source-linein');
   }
@@ -1246,6 +1249,9 @@ const SonosView = (() => {
   async function prefetchArtwork(groups) {
     for (const group of groups) {
       if (group.isLineInRoot) continue; // no artwork to prefetch
+      // Music Library is browsed on demand and can be enormous -- never
+      // prefetch it, that would mean walking a huge tree at startup.
+      if (group.isMusicLibraryRoot) continue;
       try {
         let items = [];
         if (group.isPlaylistRoot) {
@@ -1300,6 +1306,15 @@ const SonosView = (() => {
         isLineInLeaf: true
       }));
       renderLeafItems(items, 'No Line-In rooms detected. Check the DBG panel if this looks wrong.');
+      return;
+    }
+
+    if (group.isMusicLibraryRoot) {
+      currentGroup = 'Music Library';
+      sourcePanelTitle.textContent = 'MUSIC LIBRARY';
+      sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
+      const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/music-library`);
+      renderLibraryCategories(data.categories || []);
       return;
     }
 
@@ -1428,6 +1443,149 @@ const SonosView = (() => {
       li.addEventListener('click', () => openGroup(group));
       sourcePanelItems.appendChild(li);
     });
+  }
+
+  // ---------------- Music Library browsing ----------------
+  // The Music Library is genuinely recursive (Artists -> an artist ->
+  // their albums -> tracks), which renderLeafItems can't express -- it
+  // only plays leaf items and has no drill-in path for containers. So
+  // this is its own small browser built on the same generic
+  // ContentDirectory Browse the server already exposes, plus paging,
+  // since a real library can run to tens of thousands of entries and
+  // one Browse call only returns a slice.
+  const MUSIC_LIBRARY_GROUP = { id: 'musiclibrary', title: 'Music Library', browsable: true, isMusicLibraryRoot: true };
+
+  function renderLibraryCategories(categories) {
+    sourcePanelItems.innerHTML = '';
+    if (categories.length === 0) {
+      sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">No music library found. Add a music share in the Sonos app first.</li>';
+      return;
+    }
+    categories.forEach((cat) => {
+      const li = document.createElement('li');
+      li.className = 'sourcepanel__item';
+      const labelBlock = document.createElement('div');
+      labelBlock.className = 'sourcepanel__labelblock';
+      const label = document.createElement('span');
+      label.className = 'sourcepanel__label';
+      label.textContent = cat.title;
+      labelBlock.appendChild(label);
+      li.appendChild(labelBlock);
+      const chevron = document.createElement('span');
+      chevron.className = 'sourcepanel__chevron';
+      chevron.textContent = '\u203A';
+      li.appendChild(chevron);
+      li.addEventListener('click', () => {
+        backStack.push(() => openGroup(MUSIC_LIBRARY_GROUP));
+        updateBackButtonVisibility();
+        showLibraryContainer(cat.id, cat.title);
+      });
+      sourcePanelItems.appendChild(li);
+    });
+  }
+
+  async function showLibraryContainer(containerId, title) {
+    currentGroup = title;
+    sourcePanelTitle.textContent = title.toUpperCase();
+    sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
+    const state = { containerId, title, items: [], total: 0, nextStart: 0 };
+    await loadLibraryPage(state);
+  }
+
+  async function loadLibraryPage(state) {
+    const data = await api(
+      `/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(state.containerId)}&start=${state.nextStart}`
+    );
+    state.items = state.items.concat(data.items || []);
+    state.total = typeof data.total === 'number' ? data.total : state.items.length;
+    state.nextStart = state.items.length;
+    renderLibraryItems(state);
+  }
+
+  function renderLibraryItems(state) {
+    sourcePanelItems.innerHTML = '';
+    if (state.items.length === 0) {
+      sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Nothing here.</li>';
+      return;
+    }
+
+    state.items.forEach((item) => {
+      const li = document.createElement('li');
+      li.className = 'sourcepanel__item';
+
+      const art = document.createElement('div');
+      art.className = 'sourcepanel__art';
+      if (item.albumArtUrl) {
+        art.style.backgroundImage = `url(${item.albumArtUrl})`;
+        art.style.backgroundSize = 'cover';
+      }
+      li.appendChild(art);
+
+      const labelBlock = document.createElement('div');
+      labelBlock.className = 'sourcepanel__labelblock';
+      const label = document.createElement('span');
+      label.className = 'sourcepanel__label';
+      label.textContent = item.title;
+      labelBlock.appendChild(label);
+      if (item.artist) {
+        const sub = document.createElement('span');
+        sub.className = 'sourcepanel__servicelabel';
+        sub.textContent = item.artist;
+        labelBlock.appendChild(sub);
+      }
+      li.appendChild(labelBlock);
+
+      if (item.browsable) {
+        const chevron = document.createElement('span');
+        chevron.className = 'sourcepanel__chevron';
+        chevron.textContent = '\u203A';
+        li.appendChild(chevron);
+        li.addEventListener('click', () => {
+          backStack.push(() => showLibraryContainer(state.containerId, state.title));
+          updateBackButtonVisibility();
+          showLibraryContainer(item.id, item.title);
+        });
+      } else if (item.uri) {
+        li.addEventListener('click', async () => {
+          // Playing a track from inside an album should queue the whole
+          // album and jump to that track, not play it standalone with
+          // nothing to skip to -- the same lesson already learned with
+          // playlists. Guarded by size: doing this inside "Songs"
+          // (potentially tens of thousands of tracks) would be absurd,
+          // so anything larger than one page falls back to playing the
+          // single track.
+          const queueWholeContainer = state.total > 0 && state.total <= 200;
+          if (queueWholeContainer) {
+            await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-playlist-track`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ playlistId: state.containerId, playlistTitle: state.title, uri: item.uri })
+            });
+          } else {
+            await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-item`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ uri: item.uri, metadata: item.metadata })
+            });
+          }
+          await openSourceGroups();
+          setTimeout(refreshNowPlaying, 800);
+        });
+      }
+
+      sourcePanelItems.appendChild(li);
+    });
+
+    if (state.items.length < state.total) {
+      const more = document.createElement('li');
+      more.className = 'sourcepanel__item sourcepanel__loadmore';
+      more.textContent = `Load more (${state.items.length} of ${state.total})`;
+      more.addEventListener('click', async () => {
+        more.textContent = 'Loading\u2026';
+        await loadLibraryPage(state);
+      });
+      sourcePanelItems.appendChild(more);
+    }
   }
 
   function renderLeafItems(items, emptyMessage, playlistContainerId, playlistTitle) {
