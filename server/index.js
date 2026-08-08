@@ -484,6 +484,26 @@ async function main() {
     }, interval);
   }
   scheduleSonosPoll();
+
+  // Genuinely independent safety-net timer, decoupled entirely from the
+  // burst/targeted scheduler above. The recursive scheduler can end up
+  // staying in "targeted-only" mode indefinitely during active use --
+  // any volume/play/group action extends the fast-poll burst window
+  // another 5 seconds, so continuous normal usage can keep it from ever
+  // falling back to a full untargeted poll for a long stretch. Since
+  // only a FULL poll re-checks devices that aren't part of whatever's
+  // currently targeted, that meant a reconnected room sitting outside
+  // the active target set could go unnoticed indefinitely. This runs
+  // on its own fixed cadence no matter what the other timer is doing,
+  // guaranteeing every room gets a fresh reachability check regularly.
+  setInterval(async () => {
+    try {
+      const rooms = await sonos.getRooms();
+      broadcast({ type: 'sonos:rooms', rooms });
+    } catch (err) {
+      debugLog.warn('server', `safety-net full poll error: ${err.message}`);
+    }
+  }, POLL_INTERVAL_MS);
 }
 
 main().catch((err) => {

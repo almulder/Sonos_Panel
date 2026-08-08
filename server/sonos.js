@@ -469,6 +469,7 @@ async function getCoordinatorMap() {
         const coordinatorName = coordinatorMember ? coordinatorMember.ZoneName : null;
         zone.ZoneGroupMember.forEach((member) => {
           map[member.ZoneName] = coordinatorName || member.ZoneName;
+          healDeviceAddressIfChanged(member);
         });
       });
       lastCoordinatorMap = map;
@@ -481,6 +482,37 @@ async function getCoordinatorMap() {
   // topology rather than an empty map, which would incorrectly show
   // every room as ungrouped.
   return lastCoordinatorMap;
+}
+
+// A room that's been unplugged and reconnected often comes back with a
+// DIFFERENT IP address (a new DHCP lease, unless a reservation is set)
+// -- meaning even once it's genuinely back online, our stored Sonos
+// object (built once at startup with its OLD IP) keeps calling an
+// address nothing is listening on anymore, so it never recovers no
+// matter how many times it's polled. Every ZoneGroupMember entry
+// carries its Location (a description.xml URL) as self-reported by
+// Sonos's own topology service RIGHT NOW, which is always accurate
+// regardless of what we cached at startup -- any successful topology
+// fetch from ANY reachable device effectively tells us the current
+// address of every OTHER device in the household too, so this checks
+// for a mismatch and rebuilds the stored device object when one is
+// found, self-healing the stale-IP case without needing a restart.
+function healDeviceAddressIfChanged(member) {
+  try {
+    const key = (member.ZoneName || '').toLowerCase();
+    const existing = devicesByName.get(key);
+    if (!existing) return; // a room we've never known about -- not this function's job
+    const uri = new URL(member.Location);
+    const newHost = uri.hostname;
+    const newPort = parseInt(uri.port, 10) || existing.port;
+    if (existing.host === newHost && existing.port === newPort) return;
+    debugLog.info('sonos', `${member.ZoneName} address changed: ${existing.host}:${existing.port} -> ${newHost}:${newPort} -- rebuilding device connection`);
+    const fresh = new Sonos(newHost, newPort);
+    devicesByName.set(key, fresh);
+    attachDeviceEventListeners(member.ZoneName, fresh);
+  } catch (err) {
+    debugLog.warn('sonos', `healDeviceAddressIfChanged failed for ${member.ZoneName}: ${err.message}`);
+  }
 }
 
 // Every room name currently sharing a coordinator with roomName
