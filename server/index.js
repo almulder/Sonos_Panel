@@ -473,6 +473,7 @@ async function main() {
 
     setTimeout(async () => {
       try {
+        debugLog.info('server', `[diag-timer] recursive-scheduler firing at ${Date.now()}, useTargeted=${useTargeted}`);
         const rooms = useTargeted
           ? await sonos.getRoomsTargeted([...sonosFastPollTargets])
           : await sonos.getRooms();
@@ -498,6 +499,7 @@ async function main() {
   // guaranteeing every room gets a fresh reachability check regularly.
   setInterval(async () => {
     try {
+      debugLog.info('server', `[diag-timer] safety-net firing at ${Date.now()}`);
       const rooms = await sonos.getRooms();
       broadcast({ type: 'sonos:rooms', rooms });
     } catch (err) {

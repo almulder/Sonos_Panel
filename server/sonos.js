@@ -505,13 +505,16 @@ function healDeviceAddressIfChanged(member) {
     const uri = new URL(member.Location);
     const newHost = uri.hostname;
     const newPort = parseInt(uri.port, 10) || existing.port;
-    if (existing.host === newHost && existing.port === newPort) return;
-    debugLog.info('sonos', `${member.ZoneName} address changed: ${existing.host}:${existing.port} -> ${newHost}:${newPort} -- rebuilding device connection`);
+    if (existing.host === newHost && existing.port === newPort) {
+      debugLog.info('sonos', `[diag-heal] ${member.ZoneName}: unchanged (${existing.host}:${existing.port})`);
+      return;
+    }
+    debugLog.info('sonos', `[diag-heal] ${member.ZoneName} address changed: ${existing.host}:${existing.port} -> ${newHost}:${newPort} -- rebuilding device connection`);
     const fresh = new Sonos(newHost, newPort);
     devicesByName.set(key, fresh);
     attachDeviceEventListeners(member.ZoneName, fresh);
   } catch (err) {
-    debugLog.warn('sonos', `healDeviceAddressIfChanged failed for ${member.ZoneName}: ${err.message}`);
+    debugLog.warn('sonos', `[diag-heal] healDeviceAddressIfChanged failed for ${member.ZoneName}: ${err.message}`);
   }
 }
 
@@ -551,6 +554,8 @@ async function getRoomNameByUUID(uuid) {
 async function getRooms() {
   if (usingMock) return [...mockState.rooms].sort((a, b) => a.name.localeCompare(b.name));
   return guarded('getRooms', async () => {
+    const pollId = Date.now();
+    debugLog.info('sonos', `[diag-poll] getRooms starting at ${pollId}`);
     const coordinatorMap = await getCoordinatorMap();
     // Two fixes here: devicesByName is already keyed by name, so calling
     // device.getName() per device was an entirely unnecessary network
@@ -586,6 +591,7 @@ async function getRooms() {
         return { name, volume, playing, muted, reachable, coordinator: coordinatorMap[name] || name };
       })
     );
+    rooms.forEach((r) => debugLog.info('sonos', `[diag-poll] pollId=${pollId} ${r.name} reachable=${r.reachable}`));
     rooms.sort((a, b) => a.name.localeCompare(b.name));
     lastRoomsByName = new Map(rooms.map((r) => [r.name, r]));
     return rooms;
