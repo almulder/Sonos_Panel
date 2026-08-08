@@ -455,6 +455,33 @@ function withTimeout(promise, ms, label) {
 }
 const DEVICE_CALL_TIMEOUT_MS = 3000;
 
+// Dedicated reachability probe -- deliberately does NOT use
+// device.getVolume()/getCurrentState()/getMuted(). Straight from the
+// 'sonos' library's own source: those three methods all contain the
+// exact same shortcut --
+//   if (this._isSubscribed && this._volume) return this._volume
+// -- meaning once a device is subscribed to real-time events (which we
+// do for every device, for the instant play/volume/track updates) and
+// at least one event has ever fired for it, these methods stop making
+// network calls entirely and just return whatever the last event
+// reported, forever. A genuinely dead device can't send new events
+// either, so the cached value freezes in place -- these three calls
+// are structurally incapable of detecting that a subscribed device has
+// gone offline. The raw service action below has no such shortcut, so
+// it's a genuine network round-trip every time, used ONLY to determine
+// `reachable` -- the wrapper methods are still used elsewhere for their
+// actual values, which are correctly kept fresh via live events anyway
+// whenever the device really is online.
+async function probeReachable(device, name) {
+  try {
+    await withTimeout(device.renderingControlService().GetVolume(), DEVICE_CALL_TIMEOUT_MS, `reachability probe(${name})`);
+    return true;
+  } catch (err) {
+    debugLog.warn('sonos', `reachability probe failed for ${name}: ${err.message}`);
+    return false;
+  }
+}
+
 async function getCoordinatorMap() {
   // Tries every device in turn (not just the first) so one unreachable
   // device doesn't take down topology lookups for everyone -- and each
@@ -505,16 +532,13 @@ function healDeviceAddressIfChanged(member) {
     const uri = new URL(member.Location);
     const newHost = uri.hostname;
     const newPort = parseInt(uri.port, 10) || existing.port;
-    if (existing.host === newHost && existing.port === newPort) {
-      debugLog.info('sonos', `[diag-heal] ${member.ZoneName}: unchanged (${existing.host}:${existing.port})`);
-      return;
-    }
-    debugLog.info('sonos', `[diag-heal] ${member.ZoneName} address changed: ${existing.host}:${existing.port} -> ${newHost}:${newPort} -- rebuilding device connection`);
+    if (existing.host === newHost && existing.port === newPort) return;
+    debugLog.info('sonos', `${member.ZoneName} address changed: ${existing.host}:${existing.port} -> ${newHost}:${newPort} -- rebuilding device connection`);
     const fresh = new Sonos(newHost, newPort);
     devicesByName.set(key, fresh);
     attachDeviceEventListeners(member.ZoneName, fresh);
   } catch (err) {
-    debugLog.warn('sonos', `[diag-heal] healDeviceAddressIfChanged failed for ${member.ZoneName}: ${err.message}`);
+    debugLog.warn('sonos', `healDeviceAddressIfChanged failed for ${member.ZoneName}: ${err.message}`);
   }
 }
 
@@ -554,8 +578,6 @@ async function getRoomNameByUUID(uuid) {
 async function getRooms() {
   if (usingMock) return [...mockState.rooms].sort((a, b) => a.name.localeCompare(b.name));
   return guarded('getRooms', async () => {
-    const pollId = Date.now();
-    debugLog.info('sonos', `[diag-poll] getRooms starting at ${pollId}`);
     const coordinatorMap = await getCoordinatorMap();
     // Two fixes here: devicesByName is already keyed by name, so calling
     // device.getName() per device was an entirely unnecessary network
@@ -570,30 +592,26 @@ async function getRooms() {
         let volume = 0;
         let playing = false;
         let muted = false;
-        let reachable = true;
+        const reachable = await probeReachable(device, name);
         try {
           volume = await withTimeout(device.getVolume(), DEVICE_CALL_TIMEOUT_MS, `getVolume(${name})`);
         } catch (err) {
           debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
-          reachable = false;
         }
         try {
           const state = await withTimeout(device.getCurrentState(), DEVICE_CALL_TIMEOUT_MS, `getCurrentState(${name})`);
           playing = state === 'playing';
         } catch (err) {
           debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
-          reachable = false;
         }
         try {
           muted = await withTimeout(device.getMuted(), DEVICE_CALL_TIMEOUT_MS, `getMuted(${name})`);
         } catch (err) {
           debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
-          reachable = false;
         }
         return { name, volume, playing, muted, reachable, coordinator: coordinatorMap[name] || name };
       })
     );
-    rooms.forEach((r) => debugLog.info('sonos', `[diag-poll] pollId=${pollId} ${r.name} reachable=${r.reachable}`));
     rooms.sort((a, b) => a.name.localeCompare(b.name));
     lastRoomsByName = new Map(rooms.map((r) => [r.name, r]));
     return rooms;
@@ -627,25 +645,22 @@ async function getRoomsTargeted(targetRoomNames) {
           let volume = 0;
           let playing = false;
           let muted = false;
-          let reachable = true;
+          const reachable = await probeReachable(device, name);
           try {
             volume = await withTimeout(device.getVolume(), DEVICE_CALL_TIMEOUT_MS, `getVolume(${name})`);
           } catch (err) {
             debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
-            reachable = false;
           }
           try {
             const state = await withTimeout(device.getCurrentState(), DEVICE_CALL_TIMEOUT_MS, `getCurrentState(${name})`);
             playing = state === 'playing';
           } catch (err) {
             debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
-            reachable = false;
           }
           try {
             muted = await withTimeout(device.getMuted(), DEVICE_CALL_TIMEOUT_MS, `getMuted(${name})`);
           } catch (err) {
             debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
-            reachable = false;
           }
           const coordinator = lastCoordinatorMap[name] || name;
           return { name, volume, playing, muted, reachable, coordinator };
