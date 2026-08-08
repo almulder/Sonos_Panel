@@ -241,24 +241,30 @@ app.post('/api/sonos/group', asyncHandler(async (req, res) => {
   const [coordinatorName] = req.body.rooms;
   // Reflect the intended grouping immediately, rather than waiting on
   // Sonos's own join-settling time (which can genuinely take several
-  // seconds) before the UI shows anything. The full poll triggered right
-  // after corrects this if reality ends up differing.
+  // seconds) before the UI shows anything.
+  //
+  // Deliberately NOT triggering a fast-poll burst here anymore: a burst
+  // would re-check real topology every 500ms for the next 5 seconds,
+  // and if a tick lands before Sonos has actually finished settling the
+  // join, it reports genuinely-true-but-stale "not grouped yet" data
+  // that overwrites this correct optimistic patch -- which is exactly
+  // what caused the member room to visually revert until something
+  // else forced a re-render. The real ZonesChanged event (see sonos.js)
+  // now delivers genuine confirmation the moment Sonos actually
+  // finishes, with the slow 15s baseline poll as an ultimate fallback
+  // if that event is ever missed.
   sonos.patchCoordinatorOptimistically(req.body.rooms, coordinatorName);
   if (broadcastNow) broadcastNow();
-  // Topology itself changed -- other rooms' displayed "coordinator"
-  // label can shift too, not just the ones just grouped, so this needs
-  // a full untargeted poll rather than a scoped one.
-  triggerSonosFastPoll();
   res.json({ ok: true });
 }));
 
 app.post('/api/sonos/room/:room/ungroup', asyncHandler(async (req, res) => {
   await sonos.ungroupRoom(req.params.room);
-  // Ungrouping makes a room its own coordinator again.
+  // Ungrouping makes a room its own coordinator again. Same reasoning
+  // as /api/sonos/group above -- no fast-poll burst, rely on the
+  // optimistic patch plus the real ZonesChanged event confirmation.
   sonos.patchCoordinatorOptimistically([req.params.room], req.params.room);
   if (broadcastNow) broadcastNow();
-  // Same reasoning as /api/sonos/group above -- topology changed.
-  triggerSonosFastPoll();
   res.json({ ok: true });
 }));
 
