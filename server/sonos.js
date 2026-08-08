@@ -472,6 +472,31 @@ const DEVICE_CALL_TIMEOUT_MS = 3000;
 // `reachable` -- the wrapper methods are still used elsewhere for their
 // actual values, which are correctly kept fresh via live events anyway
 // whenever the device really is online.
+// Everything the client actually sees goes through here. Two jobs:
+//
+//   1. Drop rooms that aren't currently reachable. A disconnected
+//      speaker shouldn't sit in the room list at all -- it can't be
+//      controlled, and leaving it there was letting it get "stuck" in
+//      groups with no way to clear it.
+//
+//   2. Detach survivors from a ghost coordinator. Sonos's own topology
+//      keeps listing an unplugged speaker as a group member for a
+//      while after it drops off, so a live room could still report
+//      itself as grouped with a coordinator that no longer exists.
+//      That's what caused a live room to snap back into a group right
+//      after being ungrouped -- the next poll re-read the stale
+//      topology and undid it. Any room whose coordinator isn't in the
+//      surviving set becomes its own coordinator instead.
+//
+// NOTE: this filters only the OUTPUT. lastRoomsByName deliberately
+// keeps its full set including unreachable rooms, since that's what
+// lets a reconnecting room be noticed and come back automatically.
+function sanitizeRoomsForClient(rooms) {
+  const live = rooms.filter((r) => r.reachable !== false);
+  const liveNames = new Set(live.map((r) => r.name));
+  return live.map((r) => (liveNames.has(r.coordinator) ? r : { ...r, coordinator: r.name }));
+}
+
 async function probeReachable(device, name) {
   try {
     await withTimeout(device.renderingControlService().GetVolume(), DEVICE_CALL_TIMEOUT_MS, `reachability probe(${name})`);
@@ -614,7 +639,7 @@ async function getRooms() {
     );
     rooms.sort((a, b) => a.name.localeCompare(b.name));
     lastRoomsByName = new Map(rooms.map((r) => [r.name, r]));
-    return rooms;
+    return sanitizeRoomsForClient(rooms);
   });
 }
 
@@ -668,7 +693,7 @@ async function getRoomsTargeted(targetRoomNames) {
     );
 
     updates.forEach((room) => lastRoomsByName.set(room.name, room));
-    return [...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return sanitizeRoomsForClient([...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name)));
   });
 }
 
@@ -1174,7 +1199,7 @@ function patchCoordinatorOptimistically(roomNames, newCoordinatorName) {
 // needs genuinely fresh data.
 function getLastKnownRooms() {
   if (usingMock) return [...mockState.rooms].sort((a, b) => a.name.localeCompare(b.name));
-  return [...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return sanitizeRoomsForClient([...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name)));
 }
 
 async function ungroupRoom(roomName) {
