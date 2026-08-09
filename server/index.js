@@ -10,6 +10,7 @@ const { WebSocketServer } = require('ws');
 
 const sonos = require('./sonos');
 const localLibrary = require('./localLibrary');
+const localScanner = require('./localScanner');
 const debugLog = require('./debugLog');
 
 const PORT = process.env.PORT || 3000;
@@ -474,8 +475,25 @@ app.get('/api/local/status', (req, res) => {
     musicDir: localLibrary.MUSIC_DIR,
     streamBase: enabled ? localLibrary.getPublicBaseUrl() : null,
     publicBaseUrlSource: process.env.PUBLIC_BASE_URL ? 'env' : 'auto-detect',
-    phase: 1
+    phase: 2,
+    scanner: localScanner.getStatus()
   });
+});
+
+// Kick off a rescan on demand. Returns immediately; watch progress via
+// /api/local/status or the 'local:scan' WebSocket broadcasts.
+app.post('/api/local/rescan', (req, res) => {
+  const result = localScanner.startScan('manual');
+  res.status(result.ok ? 200 : (result.alreadyScanning ? 409 : 503)).json(result);
+});
+
+// The incompatible list with reasons (the plain-text file in appdata
+// has the paths only, one per line, as specified).
+app.get('/api/local/incompatible', (req, res) => {
+  if (!localScanner.isAvailable()) {
+    return res.status(503).json({ error: 'Library index is not available' });
+  }
+  res.json({ files: localScanner.getIncompatibleList() });
 });
 
 // Browse the raw folder tree -- lets you find test file paths without
@@ -582,6 +600,13 @@ async function main() {
   debugLog.info('server', 'Initializing Sonos...');
   await sonos.init();
   localLibrary.logStartupState();
+  const scannerReady = localScanner.init({
+    onProgress: (progress) => {
+      // broadcast is defined a few lines down; guard for the tiny
+      // window before it exists (init itself doesn't emit).
+      if (typeof broadcastScan === 'function') broadcastScan(progress);
+    }
+  });
 
   const server = app.listen(PORT, () => {
     debugLog.info('server', `Listening on http://localhost:${PORT}`);
@@ -600,6 +625,17 @@ async function main() {
       if (client.readyState === client.OPEN) client.send(msg);
     });
   }
+
+  // Scanner progress -> clients. Sent per batch commit plus on scan
+  // start/finish, so a library tab can show live scan progress.
+  function broadcastScan(progress) {
+    broadcast({ type: 'local:scan', ...progress });
+  }
+  // Startup rescan, per spec: every container boot re-syncs the index
+  // with the folder. Incremental (unchanged files are stat-and-skip),
+  // so on an already-indexed library this is quick. Runs AFTER the
+  // server is listening so the panel is usable immediately.
+  if (scannerReady) localScanner.startScan('startup');
 
   // Real-time push updates from sonos.js (PlayState/Volume/Muted/topology
   // events) call this the instant something changes, independent of

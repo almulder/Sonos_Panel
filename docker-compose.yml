@@ -48,6 +48,11 @@ services:
       # networking / ipvlan). Set explicitly only if local files fail
       # to play.
       # - PUBLIC_BASE_URL=http://10.1.10.25:3000
+      # Local Music Library scheduled rescans -- daily@HH:MM or
+      # weekly@DAY@HH:MM (days mon-sun), in the TZ below. A rescan also
+      # always runs at container start. Blank/unset = startup scans only.
+      # - RESCAN_SCHEDULE=daily@03:30
+      # - TZ=America/Denver
       # Up to three extra tabs, each embedding another local dashboard
       # (Hubitat, Home Assistant, etc.) alongside the built-in Sonos
       # tab. A tab only shows up if its _URL is set -- leave all four

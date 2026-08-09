@@ -76,6 +76,8 @@ wall panel without any special kiosk software.
 | `TAB4_TITLE`, `TAB4_COLOR`, `TAB4_ICON`, `TAB4_URL` | *(unset)* | Same as above, for a fourth tab. |
 | `MUSIC_DIR` | `/music` | Container-side path of the Local Music Library mount. Leave as-is and just volume-mount your music folder to `/music` (the Unraid template's **Music Path** field does exactly this). |
 | `PUBLIC_BASE_URL` | *(unset = auto-detect)* | Local Music Library only: the URL the **speakers** use to fetch audio from the panel. Auto-detection uses the container's own LAN IP, which is correct on ipvlan (`br0`) or host networking. Set explicitly (e.g. `http://10.1.10.25:3000`) only if local files fail to play. |
+| `RESCAN_SCHEDULE` | *(unset)* | Local Music Library only: automatic rescan schedule -- `daily@HH:MM` (e.g. `daily@03:30`) or `weekly@DAY@HH:MM` (e.g. `weekly@sun@04:00`, days `mon`-`sun`), in the container's `TZ`. Blank = no scheduled rescans; a rescan still always runs at container start. |
+| `TZ` | *(unset = UTC)* | Timezone the `RESCAN_SCHEDULE` times are interpreted in (IANA name, e.g. `America/Denver`). |
 
 No other configuration needed -- Sonos speakers are auto-discovered on
 the local network at startup.
@@ -156,20 +158,17 @@ also fetch these streams -- same open-on-the-LAN model as the panel
 itself, just now including your music files. The mount is read-only,
 so nothing can be modified either way.
 
-### Current status: Phase 1 of 4
+### Current status: Phase 2 of 4
 
 This is being built foundation-first, verified on real hardware at each
 step:
 
-1. **Streaming (this release):** the `/stream/` endpoint serves audio
-   with HTTP Range support (required for seeking), correct
-   content-types for Sonos, and a test endpoint to queue local files on
-   a room -- proving playback, seeking, metadata display, and
-   track-to-track transitions on real speakers before anything is built
-   on top.
-2. **Indexing:** a background scanner reads the embedded tags of every
-   file into a local database, with incremental rescans (only changed
-   files are re-read) and progress shown in the panel.
+1. **Streaming -- DONE, hardware-verified:** the `/stream/` endpoint
+   serves audio with HTTP Range support (seeking works), correct
+   content-types, folder album art (`cover.jpg` etc.), real track
+   durations, and queue-based playback with full transport control.
+2. **Indexing -- DONE (this release):** the background scanner
+   described below.
 3. **Browsing:** Artists / Albums / Songs / Composers / Genres /
    Folders tabs for the local library, presented identically to the
    Sonos Music Library the panel already browses -- plus search, which
@@ -179,9 +178,46 @@ step:
    the existing Sonos Playlists UI, with none of Sonos's playlist size
    limits.
 
-Phase 1 test endpoints (`/api/local/status`, `/api/local/ls`,
-`/api/local/room/<room>/test-play`) are a temporary harness and may
-change; the `/stream/` URL format is intended to be permanent.
+The `/api/local/*` endpoints are still settling and may change; the
+`/stream/` URL format is intended to be permanent.
+
+### The scanner & index (Phase 2)
+
+A background scanner walks the music folder, reads each file's embedded
+tags, and builds a SQLite index at `<appdata>/library.db` -- so the
+index survives container updates and there is no track-count limit
+anywhere. It commits in **batches of 500**, so a first scan of a huge
+library becomes browsable/playable while still in progress. Rescans are
+**incremental**: files whose modified-time and size are unchanged are
+skipped without re-reading, which makes every scan after the first one
+fast.
+
+**When scans run:** always once at container start (so the index can't
+drift after a reboot), on demand via `POST /api/local/rescan`, and
+optionally on a schedule via the `RESCAN_SCHEDULE` variable --
+`daily@HH:MM` or `weekly@DAY@HH:MM` (days `mon`-`sun`), evaluated in
+the container's `TZ`. There is deliberately no live file-watching:
+inotify does not propagate reliably through Unraid's `/mnt/user` fuse
+layer, so scheduled + startup + manual scans are the honest design.
+
+**Sonos compatibility filtering:** only files Sonos can actually play
+are indexed. The enforced limits are Sonos's published ones -- lossy:
+MP3/MP4/M4A/AAC/OGG up to 320 kbps, WMA up to 355 kbps; lossless:
+FLAC/ALAC up to 24-bit, AIFF/WAV up to 16-bit, and all lossless capped
+at a 48 kHz sample rate (that cap is Sonos's own footnote to the
+bit-depth table, and it is exactly what a real S2 speaker rejected
+during Phase 1 testing with a hi-res FLAC). Files that don't qualify
+are written to **`<appdata>/incompatible-files.txt`** -- full path, one
+per line -- and `GET /api/local/incompatible` returns the same list
+with the *reason* each file was rejected (e.g. "FLAC 24-bit exceeds
+Sonos limit" or "Opus codec is not supported by Sonos"). When a
+measurement can't be read from a file, the scanner errs toward
+indexing it rather than hiding playable music.
+
+Scan progress streams over the panel's existing WebSocket as
+`local:scan` messages (per batch, plus start/finish), and
+`GET /api/local/status` shows live scanner state, library counts, the
+last scan's summary, and the active schedule.
 
 Known constraints worth knowing up front: Sonos S2 plays FLAC up to
 24-bit/48kHz (hi-res 24/96+ files would need a transcoding step --
@@ -198,7 +234,8 @@ usually academic, but it's a real difference.
 server/
   index.js       Express app, all HTTP routes, WebSocket broadcast, poll loop
   sonos.js       All Sonos/UPnP logic: discovery, control, browsing, caching
-  localLibrary.js  Local Music Library: safe path handling + HTTP audio streaming (preview)
+  localLibrary.js  Local Music Library: safe path handling + HTTP audio/art streaming
+  localScanner.js  Local Music Library: background scanner, SQLite index, compatibility filter, rescan scheduling
   debugLog.js    Lightweight in-memory log buffer (feeds console/docker logs)
 
 public/

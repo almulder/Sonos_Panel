@@ -5,6 +5,13 @@
 # extra MB.
 FROM node:18-slim
 
+# tzdata so the TZ env actually works -- the Local Music Library's
+# scheduled rescans (RESCAN_SCHEDULE) are evaluated in local time, and
+# without zoneinfo files "daily@03:30" would silently mean 03:30 UTC.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install dependencies first (separately from copying the rest of the
@@ -51,6 +58,10 @@ ENV DATA_DIR=/app/data
 # container's LAN IP, which is correct on ipvlan/host networking.
 ENV MUSIC_DIR=/music
 ENV PUBLIC_BASE_URL=""
+# Scheduled library rescans: "daily@HH:MM" or "weekly@DAY@HH:MM"
+# (days mon-sun), evaluated in TZ. Blank = rescan only at container
+# start (which always happens when a Music Path is mounted).
+ENV RESCAN_SCHEDULE=""
 EXPOSE 3000
 
 CMD ["node", "server/index.js"]
