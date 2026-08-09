@@ -315,6 +315,45 @@ async function getTrackDurationSeconds(absPath) {
   return seconds;
 }
 
+// ---------------------------------------------------------------------
+// DIDL-Lite builder for local tracks -- lives here (not sonos.js) so the
+// browse layer can attach ready-made metadata to every track item
+// without a dependency cycle. The <res duration> attribute is what
+// makes the speaker report a real TrackDuration for plain http tracks
+// (confirmed on hardware), and protocolInfo tells it the codec.
+// ---------------------------------------------------------------------
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function secondsToHms(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+function buildTrackDidl(track) {
+  const title = escapeXml(track.title || 'Unknown');
+  const artistTag = track.artist ? `<dc:creator>${escapeXml(track.artist)}</dc:creator>` : '';
+  const albumTag = track.album ? `<upnp:album>${escapeXml(track.album)}</upnp:album>` : '';
+  const artTag = track.albumArtUrl ? `<upnp:albumArtURI>${escapeXml(track.albumArtUrl)}</upnp:albumArtURI>` : '';
+  const mime = track.mime || 'audio/mpeg';
+  const durationAttr = track.durationSeconds > 0 ? ` duration="${secondsToHms(track.durationSeconds)}"` : '';
+  const resTag = `<res protocolInfo="http-get:*:${mime}:*"${durationAttr}>${escapeXml(track.uri)}</res>`;
+  return (
+    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">' +
+    `<item id="-1" parentID="-1" restricted="true"><dc:title>${title}</dc:title>${artistTag}${albumTag}${artTag}${resTag}` +
+    '<upnp:class>object.item.audioItem.musicTrack</upnp:class></item></DIDL-Lite>'
+  );
+}
+
 function logStartupState() {
   if (!isEnabled()) {
     debugLog.info('locallib', `Local Music Library disabled -- no folder mounted at ${MUSIC_DIR} (map "Music Path" in the template to enable)`);
@@ -338,6 +377,7 @@ module.exports = {
   findFolderArt,
   buildArtUri,
   getTrackDurationSeconds,
+  buildTrackDidl,
   resolveSafe,
   getPublicBaseUrl,
   buildStreamUri,

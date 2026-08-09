@@ -11,6 +11,7 @@ const { WebSocketServer } = require('ws');
 const sonos = require('./sonos');
 const localLibrary = require('./localLibrary');
 const localScanner = require('./localScanner');
+const localBrowse = require('./localBrowse');
 const debugLog = require('./debugLog');
 
 const PORT = process.env.PORT || 3000;
@@ -316,6 +317,11 @@ app.put('/api/sonos/saved-groups/:id', asyncHandler(async (req, res) => {
 
 app.get('/api/sonos/room/:room/source-groups', asyncHandler(async (req, res) => {
   const groups = await sonos.getSourceGroups(req.params.room);
+  // Local Music Library pinned to the very top when the index exists --
+  // it's the panel's own content, above even the Sonos Music Library.
+  if (localBrowse.available()) {
+    groups.unshift({ id: 'locallibrary', title: 'Local Library', browsable: true, isLocalLibraryRoot: true });
+  }
   res.json({ groups });
 }));
 
@@ -475,9 +481,16 @@ app.get('/api/local/status', (req, res) => {
     musicDir: localLibrary.MUSIC_DIR,
     streamBase: enabled ? localLibrary.getPublicBaseUrl() : null,
     publicBaseUrlSource: process.env.PUBLIC_BASE_URL ? 'env' : 'auto-detect',
-    phase: 2,
+    phase: 3,
     scanner: localScanner.getStatus()
   });
+});
+
+// Category roots for the Local Music Library browse UI -- same shape
+// as the Sonos music-library categories endpoint the client already
+// renders. Room-independent (the index lives on the panel).
+app.get('/api/local/library-categories', (req, res) => {
+  res.json({ categories: localBrowse.getCategories() });
 });
 
 // Kick off a rescan on demand. Returns immediately; watch progress via

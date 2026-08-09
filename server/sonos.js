@@ -34,6 +34,8 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const debugLog = require('./debugLog');
+const localLibrary = require('./localLibrary');
+const localBrowse = require('./localBrowse');
 
 // Manual overrides that are more reliable than guessing at UPnP fields --
 // see getLineInRooms() for why this exists. Missing/invalid config.json
@@ -1084,6 +1086,8 @@ async function getNowPlaying(roomName) {
         const originRoom = await getRoomNameByUUID(uuid);
         sourceLine = originRoom ? `Line-In - ${originRoom}` : 'Line-In';
         if (originRoom) lineInDeviceName = await getLineInCurrentName(originRoom);
+      } else if (playlistContext && playlistContext.local) {
+        sourceLine = `Local Library - ${playlistContext.title}`;
       } else if (playlistContext) {
         const serviceMap = await loadServiceNameMap();
         const trackServiceLabel = deriveServiceLabel(null, track.uri, serviceMap);
@@ -1601,6 +1605,16 @@ function mapDidlNode(device, node, browsable, serviceMap) {
 // thousands of entries, so callers need to know there's more and be
 // able to ask for the next slice.
 async function browseContainerPaged(roomName, containerId, start = 0, count = 200) {
+  // Local Music Library containers (the L: namespace) are served from
+  // the panel's own SQLite index, not from a speaker -- intercepted
+  // here, at the shared chokepoint, so every existing consumer
+  // (browsing UI paging, play-playlist-track's container queueing,
+  // getCachedContainerItems metadata recovery, add-to-playlist) works
+  // on local content with no further changes.
+  if (typeof containerId === 'string' && containerId.startsWith('L:')) {
+    return localBrowse.browsePage(containerId, start, count);
+  }
+
   if (usingMock) {
     const items = mockState.browse[containerId] || [];
     return { items, total: items.length };
@@ -1737,7 +1751,11 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
     await device.selectQueue();
     await device.selectTrack(targetIndex >= 0 ? targetIndex + 1 : 1);
     await device.play();
-    roomPlaylistContext.set(roomName, { id: playlistContainerId, title: playlistTitle || 'Playlist' });
+    roomPlaylistContext.set(roomName, {
+      id: playlistContainerId,
+      title: playlistTitle || 'Playlist',
+      local: String(playlistContainerId).startsWith('L:')
+    });
   });
 }
 
@@ -1750,22 +1768,9 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
 // to expect -- belt-and-suspenders alongside the Content-Type header
 // the /stream/ route also sends.
 function buildLocalTrackMetadata(track) {
-  const title = Helpers.EncodeXml(track.title || 'Unknown');
-  const artistTag = track.artist ? `<dc:creator>${Helpers.EncodeXml(track.artist)}</dc:creator>` : '';
-  const albumTag = track.album ? `<upnp:album>${Helpers.EncodeXml(track.album)}</upnp:album>` : '';
-  const artTag = track.albumArtUrl ? `<upnp:albumArtURI>${Helpers.EncodeXml(track.albumArtUrl)}</upnp:albumArtURI>` : '';
-  const mime = track.mime || 'audio/mpeg';
-  // duration attribute is what makes the SPEAKER report a real
-  // TrackDuration for plain http tracks (confirmed on hardware:
-  // without it, GetPositionInfo says 0:00:00 and progress bars have
-  // no total).
-  const durationAttr = track.durationSeconds > 0 ? ` duration="${secondsToHms(track.durationSeconds)}"` : '';
-  const resTag = `<res protocolInfo="http-get:*:${mime}:*"${durationAttr}>${Helpers.EncodeXml(track.uri)}</res>`;
-  return (
-    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">' +
-    `<item id="-1" parentID="-1" restricted="true"><dc:title>${title}</dc:title>${artistTag}${albumTag}${artTag}${resTag}` +
-    '<upnp:class>object.item.audioItem.musicTrack</upnp:class></item></DIDL-Lite>'
-  );
+  // Shared with the local-library browse layer, which pre-attaches the
+  // same DIDL to every track item it serves.
+  return localLibrary.buildTrackDidl(track);
 }
 
 // Queue an arbitrary list of tracks (each {uri, title, artist, album,

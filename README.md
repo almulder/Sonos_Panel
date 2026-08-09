@@ -12,8 +12,10 @@ around the house.
 - Play/pause/skip, volume (individual room or synced across a group)
 - Group and ungroup rooms by selecting several and confirming
 - Browse and play Favorites, Playlists, and Line-In sources
-- Local Music Library (preview): stream your own music files straight
-  from the server to the speakers -- no Sonos 65,000-song index limit
+- Local Music Library: browse (Artists / Albums / Songs / Composers /
+  Genres / Folders, with real search) and stream your own music files
+  straight from the server to the speakers -- no Sonos 65,000-song
+  index limit
 - Album art, track/artist, and source info while playing
 - An ambient screensaver after a period of inactivity -- bouncing
   now-playing display while something's playing, a slow color-cycling
@@ -158,7 +160,7 @@ also fetch these streams -- same open-on-the-LAN model as the panel
 itself, just now including your music files. The mount is read-only,
 so nothing can be modified either way.
 
-### Current status: Phase 2 of 4
+### Current status: Phase 3 of 5
 
 This is being built foundation-first, verified on real hardware at each
 step:
@@ -167,16 +169,30 @@ step:
    serves audio with HTTP Range support (seeking works), correct
    content-types, folder album art (`cover.jpg` etc.), real track
    durations, and queue-based playback with full transport control.
-2. **Indexing -- DONE (this release):** the background scanner
-   described below.
-3. **Browsing:** Artists / Albums / Songs / Composers / Genres /
-   Folders tabs for the local library, presented identically to the
-   Sonos Music Library the panel already browses -- plus search, which
-   gets *better* than Sonos's (real substring matching instead of
-   prefix-only).
+2. **Indexing -- DONE:** the background scanner described below.
+3. **Browsing -- DONE (this release):** a "Local Library" source,
+   pinned to the top of the Sources list, with Artists / Albums /
+   Songs / Composers / Genres / Folders -- presented through the exact
+   same browser as the Sonos Music Library. Big indexes split into A-Z
+   letter buckets automatically (tune with `LOCAL_BUCKET_THRESHOLD`,
+   default 300); every category except Folders has search, and it's
+   real substring search against the index rather than Sonos's
+   prefix-only trick. Tapping a track inside an album queues the whole
+   album and jumps to that track (same behavior as the Sonos library),
+   now-playing shows "Local Library - <album>", and Folders shows only
+   indexed, Sonos-playable files -- never something that would error
+   when tapped. Album artwork comes from folder images (`cover.jpg`
+   etc.); extracting art embedded in the files themselves is still to
+   come.
 4. **Local playlists:** create/edit playlists of local tracks, mirroring
    the existing Sonos Playlists UI, with none of Sonos's playlist size
    limits.
+5. **Transcoding (planned), two flavors:** a transparent
+   transcode-on-play path with an on-disk cache, so hi-res files play
+   on Sonos without ever modifying the originals -- and a separate
+   batch convert-and-replace maintenance tool for permanently
+   downsampling originals in place, for collections where hi-res files
+   cause problems in other players too.
 
 The `/api/local/*` endpoints are still settling and may change; the
 `/stream/` URL format is intended to be permanent.
@@ -236,6 +252,7 @@ server/
   sonos.js       All Sonos/UPnP logic: discovery, control, browsing, caching
   localLibrary.js  Local Music Library: safe path handling + HTTP audio/art streaming
   localScanner.js  Local Music Library: background scanner, SQLite index, compatibility filter, rescan scheduling
+  localBrowse.js   Local Music Library: virtual L: container tree (browse/search/paging) served from the index
   debugLog.js    Lightweight in-memory log buffer (feeds console/docker logs)
 
 public/

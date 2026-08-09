@@ -590,6 +590,14 @@ function isAvailable() {
   return !!db;
 }
 
+// The browse layer (localBrowse.js) reads the index directly -- one
+// shared connection is exactly how better-sqlite3 is meant to be used
+// (synchronous, single-process), and WAL mode keeps reads snappy while
+// a scan is writing.
+function getDatabase() {
+  return db;
+}
+
 function getStatus() {
   if (!db) {
     return { available: false, reason: unavailableReason, schedule: describeSchedule(schedule) };
@@ -627,6 +635,7 @@ function getIncompatibleList() {
 module.exports = {
   init,
   startScan,
+  getDatabase,
   getStatus,
   getIncompatibleList,
   isAvailable,
