@@ -1112,12 +1112,19 @@ const SonosView = (() => {
 
   playPauseBtn.addEventListener('click', async () => {
     if (!focusedRoom) return;
-    if (currentlyPlaying) {
-      await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/pause`, { method: 'POST' });
+    // Mirrors the prev/next handlers below: surface a failed
+    // pause/play instead of silently swallowing it. Found the hard way
+    // during Local Music Library testing -- a pause that the speaker
+    // rejects (e.g. UPnP 701 because the focused room isn't actually
+    // playing) previously showed NOTHING, making the button feel dead.
+    const action = currentlyPlaying ? 'pause' : 'play';
+    const result = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/${action}`, { method: 'POST' });
+    if (result && result.error) {
+      artistEl.textContent = currentlyPlaying ? "Can't pause right now" : "Can't play right now";
+      setTimeout(refreshNowPlaying, 2000);
     } else {
-      await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play`, { method: 'POST' });
+      await refreshNowPlaying();
     }
-    await refreshNowPlaying();
   });
 
   prevBtn.addEventListener('click', async () => {

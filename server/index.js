@@ -537,6 +537,13 @@ app.get('/art/*', (req, res) => {
   });
 });
 
+// Diagnostic: what does the SPEAKER say about the current session?
+// Queue mode vs direct URI, transport state, and -- the key field --
+// which transport actions the speaker will accept right now.
+app.get('/api/local/room/:room/debug-transport', asyncHandler(async (req, res) => {
+  res.json(await sonos.getTransportDebug(req.params.room));
+}));
+
 // TEST HARNESS: queue one or more local files on a room and play them.
 // Body: { "paths": ["Artist/Album/01 Song.flac", ...] } -- paths
 // relative to the music root. Builds full HTTP URIs + DIDL metadata and

@@ -1787,6 +1787,50 @@ async function playTracksAsQueue(roomName, tracks) {
   roomLocalQueueContext.set(roomName, new Map(tracks.map((t) => [t.uri, t])));
 }
 
+// Raw transport diagnostics for the Local Music Library hardware
+// verification: surfaces what the SPEAKER itself says about the current
+// session, so a 701/711 can be attributed precisely rather than
+// guessed at. The three tells: GetMediaInfo.CurrentURI distinguishes
+// queue playback (x-rincon-queue:...) from direct-URI playback and
+// NrTracks shows the queue length; GetTransportInfo gives the true
+// transport state; and GetCurrentTransportActions is the speaker's own
+// list of which controls it will accept RIGHT NOW -- if "Pause" isn't
+// in that list while music is playing, the speaker classified the
+// content as unpausable (a stream), which is a metadata/classification
+// problem, not a panel bug.
+async function getTransportDebug(roomName) {
+  if (usingMock) return { mock: true };
+  const device = findDevice(roomName);
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  const svc = device.avTransportService();
+  const safe = async (fn) => {
+    try { return await fn(); } catch (err) { return { error: err.message }; }
+  };
+  const [mediaInfo, transportInfo, positionInfo, actions] = await Promise.all([
+    safe(() => svc.GetMediaInfo()),
+    safe(() => svc.GetTransportInfo()),
+    safe(() => svc.GetPositionInfo()),
+    safe(() => svc.GetCurrentTransportActions())
+  ]);
+  const currentURI = (mediaInfo && mediaInfo.CurrentURI) || '';
+  // Full metadata XML is huge and mostly noise here -- keep a preview.
+  if (positionInfo && typeof positionInfo.TrackMetaData === 'string') {
+    positionInfo.TrackMetaData = positionInfo.TrackMetaData.slice(0, 400);
+  }
+  return {
+    room: roomName,
+    queueMode: currentURI.startsWith('x-rincon-queue:'),
+    transportState: (transportInfo && transportInfo.CurrentTransportState) || null,
+    allowedActions: (actions && actions.Actions) || actions || null,
+    queueLength: (mediaInfo && mediaInfo.NrTracks) || null,
+    trackNumber: (positionInfo && positionInfo.Track) || null,
+    trackDuration: (positionInfo && positionInfo.TrackDuration) || null,
+    position: (positionInfo && positionInfo.RelTime) || null,
+    mediaInfo,
+    positionInfo
+  };
+}
+
 // targetRoomName = the room that will start playing (the one you had
 // focused when you opened Sources)
 // sourceRoomName = whose physical line-in input to relay (what you
@@ -2090,6 +2134,7 @@ module.exports = {
   playItem,
   playPlaylistTrack,
   playTracksAsQueue,
+  getTransportDebug,
   playLineInFrom,
   isMock
 };
