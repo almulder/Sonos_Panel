@@ -273,10 +273,21 @@ function init(options) {
       CREATE TABLE IF NOT EXISTS incompatible (
         path TEXT PRIMARY KEY,
         reason TEXT,
-        generation INTEGER NOT NULL
+        generation INTEGER NOT NULL,
+        mtime_ms INTEGER,
+        size INTEGER
       );
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     `);
+    // In-place migration for databases created before incompatible
+    // files learned to skip: add the mtime/size columns if missing.
+    // Existing rows keep NULLs, which never match a stat -- so each
+    // known-bad file gets re-parsed exactly once more (repopulating
+    // the columns) and skips forever after. No data loss, no forced
+    // full rescan.
+    const incompatCols = db.prepare('PRAGMA table_info(incompatible)').all().map((c) => c.name);
+    if (!incompatCols.includes('mtime_ms')) db.exec('ALTER TABLE incompatible ADD COLUMN mtime_ms INTEGER');
+    if (!incompatCols.includes('size')) db.exec('ALTER TABLE incompatible ADD COLUMN size INTEGER');
     stmts = {
       getTrack: db.prepare('SELECT mtime_ms, size FROM tracks WHERE path = ?'),
       touchTrack: db.prepare('UPDATE tracks SET generation = ? WHERE path = ?'),
@@ -292,10 +303,12 @@ function init(options) {
           track_no=excluded.track_no, disc_no=excluded.disc_no, year=excluded.year,
           duration_s=excluded.duration_s, mime=excluded.mime, embedded_art=excluded.embedded_art
       `),
-      getIncompatible: null,
+      getIncompatibleRow: db.prepare('SELECT mtime_ms, size FROM incompatible WHERE path = ?'),
+      touchIncompatible: db.prepare('UPDATE incompatible SET generation = ? WHERE path = ?'),
       upsertIncompatible: db.prepare(`
-        INSERT INTO incompatible (path, reason, generation) VALUES (?, ?, ?)
-        ON CONFLICT(path) DO UPDATE SET reason=excluded.reason, generation=excluded.generation
+        INSERT INTO incompatible (path, reason, generation, mtime_ms, size) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET reason=excluded.reason, generation=excluded.generation,
+          mtime_ms=excluded.mtime_ms, size=excluded.size
       `),
       deleteStaleTracks: db.prepare('DELETE FROM tracks WHERE generation <> ?'),
       deleteStaleIncompatible: db.prepare('DELETE FROM incompatible WHERE generation <> ?'),
@@ -390,7 +403,8 @@ function commitBatch(generation, force) {
     for (const op of batch) {
       if (op.kind === 'track') stmts.upsertTrack.run(op.row);
       else if (op.kind === 'touch') stmts.touchTrack.run(generation, op.path);
-      else if (op.kind === 'incompatible') stmts.upsertIncompatible.run(op.path, op.reason, generation);
+      else if (op.kind === 'touchIncompatible') stmts.touchIncompatible.run(generation, op.path);
+      else if (op.kind === 'incompatible') stmts.upsertIncompatible.run(op.path, op.reason, generation, op.mtime_ms, op.size);
     }
   });
   txn(ops);
@@ -417,6 +431,16 @@ async function processFile(rel, generation, mm) {
     pendingOps.push({ kind: 'touch', path: rel });
     return;
   }
+  // Known-incompatible files skip the same way -- their verdict can't
+  // change unless the file does, and without this every rescan
+  // (including every startup scan) would re-parse the entire reject
+  // list just to reject it again.
+  const knownBad = stmts.getIncompatibleRow.get(rel);
+  if (knownBad && knownBad.mtime_ms === Math.round(stat.mtimeMs) && knownBad.size === stat.size) {
+    scanState.skippedUnchanged += 1;
+    pendingOps.push({ kind: 'touchIncompatible', path: rel });
+    return;
+  }
   const ext = path.extname(rel).toLowerCase();
   let meta = null;
   let verdict;
@@ -428,7 +452,10 @@ async function processFile(rel, generation, mm) {
   }
   if (!verdict.ok) {
     scanState.incompatible += 1;
-    pendingOps.push({ kind: 'incompatible', path: rel, reason: verdict.reason });
+    pendingOps.push({
+      kind: 'incompatible', path: rel, reason: verdict.reason,
+      mtime_ms: Math.round(stat.mtimeMs), size: stat.size
+    });
     return;
   }
   const common = (meta && meta.common) || {};
