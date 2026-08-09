@@ -897,11 +897,37 @@ async function deleteSonosPlaylist(playlistId) {
   return ok;
 }
 
-async function addUriToPlaylist(playlistId, uri) {
+async function addUriToPlaylist(playlistId, uri, metadata) {
   if (usingMock) return { added: 1 };
   const device = anyDevice();
   if (!device) throw new Error('No Sonos device available');
-  const result = await device.addToPlaylist(barePlaylistId(playlistId), uri);
+  let result;
+  if (metadata) {
+    // Manual AddURIToSavedQueue (same UpdateID handshake the library's
+    // addToPlaylist does internally) so OUR full DIDL -- title, artist,
+    // album, albumArtURI, duration -- is what gets STORED on the
+    // playlist entry. The library variant auto-generates metadata from
+    // the bare URI, which for a plain http:// Local Library stream URL
+    // is a stub with no artwork at all; found on real hardware as
+    // albums added to playlists showing no cover anywhere (playlist
+    // browse, art prefetch, and playback), even though they played.
+    const bare = barePlaylistId(playlistId);
+    const playlist = await device.getPlaylist(bare);
+    const raw = await device.avTransportService().AddURIToSavedQueue({
+      InstanceID: 0,
+      ObjectID: `SQ:${bare}`,
+      UpdateID: playlist.updateID,
+      EnqueuedURI: Helpers.EncodeXml(uri),
+      EnqueuedURIMetaData: Helpers.EncodeXml(metadata),
+      AddAtIndex: 4294967295
+    });
+    result = {
+      NumTracksAdded: parseInt(raw.NumTracksAdded, 10) || 0,
+      NewQueueLength: parseInt(raw.NewQueueLength, 10) || 0
+    };
+  } else {
+    result = await device.addToPlaylist(barePlaylistId(playlistId), uri);
+  }
   invalidateContainerCache(`SQ:${barePlaylistId(playlistId)}`);
   invalidateContainerCache('SQ:');
   invalidatePlaylistsCache();
@@ -926,7 +952,10 @@ async function addContainerToPlaylist(roomName, playlistId, containerId) {
   const failed = [];
   for (const track of tracks) {
     try {
-      await addUriToPlaylist(playlistId, track.uri);
+      // Pass each track's own DIDL through when the browse layer
+      // supplied one (Local Library items always do), so whole-album
+      // adds store full metadata too.
+      await addUriToPlaylist(playlistId, track.uri, track.metadata);
       added += 1;
     } catch (err) {
       failed.push(track.title);

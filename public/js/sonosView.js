@@ -1822,7 +1822,7 @@ const SonosView = (() => {
           await openSourceGroups();
           setTimeout(refreshNowPlaying, 800);
         });
-        li.appendChild(buildAddToPlaylistButton(item.title, { uri: item.uri }));
+        li.appendChild(buildAddToPlaylistButton(item.title, { uri: item.uri, metadata: item.metadata }));
       }
 
       sourcePanelItems.appendChild(li);

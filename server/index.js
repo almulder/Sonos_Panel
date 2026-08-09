@@ -386,13 +386,13 @@ app.delete('/api/sonos/playlists/:id', asyncHandler(async (req, res) => {
 // Accepts either a single track (uri) or a whole album/container
 // (containerId) -- the UI offers "add to playlist" at both levels.
 app.post('/api/sonos/playlists/:id/add', asyncHandler(async (req, res) => {
-  const { uri, containerId, room } = req.body;
+  const { uri, containerId, room, metadata } = req.body;
   if (containerId) {
     const result = await sonos.addContainerToPlaylist(room, req.params.id, containerId);
     return res.json(result);
   }
   if (!uri) return res.status(400).json({ error: 'Provide either uri or containerId' });
-  const result = await sonos.addUriToPlaylist(req.params.id, uri);
+  const result = await sonos.addUriToPlaylist(req.params.id, uri, metadata);
   res.json(result);
 }));
 
