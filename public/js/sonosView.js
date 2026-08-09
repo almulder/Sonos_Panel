@@ -117,6 +117,11 @@ function iconFilenameForService(serviceLabel) {
 }
 
 function buildSourceIcon(group) {
+  if (group.isLocalLibraryRoot) {
+    // Dedicated icon if the asset exists; falls back to default.png
+    // via buildImgIconWithFallback's onerror handler otherwise.
+    return buildImgIconWithFallback('source-locallibrary');
+  }
   if (group.isMusicLibraryRoot) {
     return buildImgIconWithFallback('source-musiclibrary');
   }
@@ -1262,7 +1267,7 @@ const SonosView = (() => {
       if (group.isLineInRoot) continue; // no artwork to prefetch
       // Music Library is browsed on demand and can be enormous -- never
       // prefetch it, that would mean walking a huge tree at startup.
-      if (group.isMusicLibraryRoot) continue;
+      if (group.isMusicLibraryRoot || group.isLocalLibraryRoot) continue;
       try {
         let items = [];
         if (group.isPlaylistRoot) {
@@ -1318,6 +1323,15 @@ const SonosView = (() => {
         isLineInLeaf: true
       }));
       renderLeafItems(items, 'No Line-In rooms detected. Check the DBG panel if this looks wrong.');
+      return;
+    }
+
+    if (group.isLocalLibraryRoot) {
+      currentGroup = 'Local Library';
+      sourcePanelTitle.textContent = 'LOCAL LIBRARY';
+      sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
+      const data = await api('/api/local/library-categories');
+      renderLibraryCategories(data.categories || [], LOCAL_LIBRARY_GROUP);
       return;
     }
 
@@ -1596,8 +1610,9 @@ const SonosView = (() => {
   // since a real library can run to tens of thousands of entries and
   // one Browse call only returns a slice.
   const MUSIC_LIBRARY_GROUP = { id: 'musiclibrary', title: 'Music Library', browsable: true, isMusicLibraryRoot: true };
+  const LOCAL_LIBRARY_GROUP = { id: 'locallibrary', title: 'Local Library', browsable: true, isLocalLibraryRoot: true };
 
-  function renderLibraryCategories(categories) {
+  function renderLibraryCategories(categories, backGroup = MUSIC_LIBRARY_GROUP) {
     hideLibrarySearch();
     sourcePanelItems.innerHTML = '';
     if (categories.length === 0) {
@@ -1619,7 +1634,7 @@ const SonosView = (() => {
       chevron.textContent = '\u203A';
       li.appendChild(chevron);
       li.addEventListener('click', () => {
-        backStack.push(() => openGroup(MUSIC_LIBRARY_GROUP));
+        backStack.push(() => openGroup(backGroup));
         updateBackButtonVisibility();
         showLibraryContainer(cat.id, cat.title, cat.id);
       });
@@ -1639,7 +1654,14 @@ const SonosView = (() => {
   let librarySearchTimer = null;
 
   function isSearchableCategory(categoryId) {
-    return typeof categoryId === 'string' && categoryId.startsWith('A:') && categoryId !== 'A:PLAYLISTS';
+    if (typeof categoryId !== 'string') return false;
+    if (categoryId.startsWith('A:')) return categoryId !== 'A:PLAYLISTS';
+    // Local Music Library categories search the same way (the server
+    // treats "L:CATEGORY:term" as a search, mirroring Sonos's own
+    // "<category>:<term>" browse convention). Folders is a path
+    // namespace, not a searchable index -- same exclusion as S:.
+    if (categoryId.startsWith('L:')) return categoryId !== 'L:FOLDERS';
+    return false;
   }
 
   function hideLibrarySearch() {

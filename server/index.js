@@ -15,6 +15,10 @@ const localBrowse = require('./localBrowse');
 const debugLog = require('./debugLog');
 
 const PORT = process.env.PORT || 3000;
+// Surfaced in /api/config and the boot log so "which build is this
+// panel actually running" is always answerable in one request.
+// eslint-disable-next-line global-require
+const PKG_VERSION = require('../package.json').version;
 // User-selectable accent color (hex). Drives the UI accent (buttons,
 // highlights, borders) and the idle screensaver's color-cycle animation --
 // see public/js/theme.js for how it's applied client-side.
@@ -128,7 +132,21 @@ function triggerSonosFastPoll(targetRoomNames) {
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// no-cache here means "revalidate every time", NOT "don't cache":
+// browsers still keep the files but send a conditional request on each
+// load, and the ETag turns unchanged files into ~1ms 304s on the LAN.
+// Without this, express.static serves no Cache-Control at all and
+// browsers fall back to heuristic caching -- which is exactly how a
+// wall tablet kept running week-old sonosView.js after a container
+// update and rendered the new Local Library source as an empty
+// streaming service (found the hard way in v0.5.0 testing).
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  etag: true,
+  lastModified: true,
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+  }
+}));
 
 // ---------------------------------------------------------------------
 // Crash safety net #1: wrap every async route handler. Without this, a
@@ -167,6 +185,7 @@ process.on('uncaughtException', (err) => {
 
 app.get('/api/config', (req, res) => {
   res.json({
+    version: PKG_VERSION,
     color: THEME_COLOR,
     screensaverTimeoutMs: SCREENSAVER_TIMEOUT_SECONDS * 1000,
     tabs: buildExtraTabs()
@@ -622,7 +641,7 @@ async function main() {
   });
 
   const server = app.listen(PORT, () => {
-    debugLog.info('server', `Listening on http://localhost:${PORT}`);
+    debugLog.info('server', `Sonos Panel v${PKG_VERSION} listening on http://localhost:${PORT}`);
     debugLog.info('server', `Sonos mock mode: ${sonos.isMock()}`);
   });
 
