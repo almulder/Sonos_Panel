@@ -568,7 +568,8 @@ app.post('/api/local/room/:room/test-play', asyncHandler(async (req, res) => {
     if (!abs || !localLibrary.isAudioFile(abs) || !fs.existsSync(abs)) {
       return res.status(400).json({ error: `Not a playable file under the music root: ${rel}` });
     }
-    tracks.push({ uri: localLibrary.buildStreamUri(rel), ...localLibrary.describeTrack(rel) });
+    const durationSeconds = await localLibrary.getTrackDurationSeconds(abs);
+    tracks.push({ uri: localLibrary.buildStreamUri(rel), durationSeconds, ...localLibrary.describeTrack(rel) });
   }
   await sonos.playTracksAsQueue(req.params.room, tracks);
   triggerSonosFastPoll([req.params.room]);

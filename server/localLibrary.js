@@ -258,6 +258,62 @@ function listDir(relPath) {
   };
 }
 
+// ---------------------------------------------------------------------
+// Track duration -- needed because, confirmed via debug-transport on
+// real hardware: the speaker reports TrackDuration 0:00:00 for plain
+// HTTP queue items unless the enqueued DIDL's <res> element carries a
+// duration attribute. Without it the panel's progress bar has no total
+// to count against (elapsed shows, remaining/length don't). Durations
+// are read from the file's own headers via music-metadata (pinned to
+// 7.x -- the last CommonJS-compatible line; 8+ is ESM-only and can't
+// be require()d on Node 18). This is the Phase 2 tag library pulled
+// forward for one field; the Phase 2 scanner will store durations in
+// the index so the queue-time parse below leaves the hot path.
+// ---------------------------------------------------------------------
+let musicMetadata = null;
+function loadMusicMetadata() {
+  if (musicMetadata === null) {
+    try {
+      musicMetadata = require('music-metadata');
+    } catch (err) {
+      musicMetadata = false;
+      debugLog.warn('locallib', `music-metadata unavailable (${err.message}) -- track durations will be unknown`);
+    }
+  }
+  return musicMetadata || null;
+}
+
+// abs path -> {mtimeMs, size, seconds}; keyed on mtime+size so an
+// edited/replaced file re-parses but repeat plays of the same file
+// don't. Failed parses cache as 0 for the same reason.
+const durationCache = new Map();
+
+async function getTrackDurationSeconds(absPath) {
+  let stat;
+  try {
+    stat = fs.statSync(absPath);
+  } catch (err) {
+    return 0;
+  }
+  const cached = durationCache.get(absPath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.seconds;
+  const mm = loadMusicMetadata();
+  if (!mm) return 0;
+  let seconds = 0;
+  try {
+    // duration:true forces an accurate read even for formats that
+    // would otherwise need estimating (e.g. VBR MP3 without a Xing
+    // header means scanning the whole file) -- acceptable at
+    // queue-time for a handful of tracks on local disks.
+    const meta = await mm.parseFile(absPath, { duration: true });
+    seconds = Math.round((meta.format && meta.format.duration) || 0);
+  } catch (err) {
+    debugLog.warn('locallib', `duration parse failed for ${absPath}: ${err.message}`);
+  }
+  durationCache.set(absPath, { mtimeMs: stat.mtimeMs, size: stat.size, seconds });
+  return seconds;
+}
+
 function logStartupState() {
   if (!isEnabled()) {
     debugLog.info('locallib', `Local Music Library disabled -- no folder mounted at ${MUSIC_DIR} (map "Music Path" in the template to enable)`);
@@ -280,6 +336,7 @@ module.exports = {
   imageContentTypeFor,
   findFolderArt,
   buildArtUri,
+  getTrackDurationSeconds,
   resolveSafe,
   getPublicBaseUrl,
   buildStreamUri,

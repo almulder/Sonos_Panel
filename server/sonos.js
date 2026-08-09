@@ -1126,6 +1126,7 @@ async function getNowPlaying(roomName) {
       if (!track.artist) track.artist = localTrack.artist || '';
       if (!track.album) track.album = localTrack.album || '';
       if (!track.albumArtURL) track.albumArtURL = localTrack.albumArtUrl || null;
+      if (!track.duration && localTrack.durationSeconds) track.duration = localTrack.durationSeconds;
       if (!sourceLine) sourceLine = 'Local Library';
     }
 
@@ -1754,7 +1755,12 @@ function buildLocalTrackMetadata(track) {
   const albumTag = track.album ? `<upnp:album>${Helpers.EncodeXml(track.album)}</upnp:album>` : '';
   const artTag = track.albumArtUrl ? `<upnp:albumArtURI>${Helpers.EncodeXml(track.albumArtUrl)}</upnp:albumArtURI>` : '';
   const mime = track.mime || 'audio/mpeg';
-  const resTag = `<res protocolInfo="http-get:*:${mime}:*">${Helpers.EncodeXml(track.uri)}</res>`;
+  // duration attribute is what makes the SPEAKER report a real
+  // TrackDuration for plain http tracks (confirmed on hardware:
+  // without it, GetPositionInfo says 0:00:00 and progress bars have
+  // no total).
+  const durationAttr = track.durationSeconds > 0 ? ` duration="${secondsToHms(track.durationSeconds)}"` : '';
+  const resTag = `<res protocolInfo="http-get:*:${mime}:*"${durationAttr}>${Helpers.EncodeXml(track.uri)}</res>`;
   return (
     '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">' +
     `<item id="-1" parentID="-1" restricted="true"><dc:title>${title}</dc:title>${artistTag}${albumTag}${artTag}${resTag}` +
