@@ -67,6 +67,56 @@ function contentTypeFor(name) {
   return AUDIO_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream';
 }
 
+// Album art images, for the /art/ route. Kept separate from AUDIO_TYPES
+// on purpose: /stream/ serves ONLY audio and /art/ serves ONLY images,
+// so neither route can be used to reach the other's file types.
+const IMAGE_TYPES = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp'
+};
+
+function isImageFile(name) {
+  return Object.prototype.hasOwnProperty.call(IMAGE_TYPES, path.extname(name).toLowerCase());
+}
+
+function imageContentTypeFor(name) {
+  return IMAGE_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream';
+}
+
+// Common cover-image filenames rippers leave next to the tracks, in
+// preference order. Matched case-insensitively against the folder's
+// actual contents (Cover.JPG etc. all count).
+const ART_BASENAMES = ['cover', 'folder', 'front', 'album', 'albumart', 'albumartsmall'];
+
+// dir relPath -> art filename (or null), cached because every track in
+// an album asks about the same folder. Process-lifetime cache is fine:
+// art files change about never, and a container restart clears it.
+const folderArtCache = new Map();
+
+function findFolderArt(relDir) {
+  const key = relDir || '';
+  if (folderArtCache.has(key)) return folderArtCache.get(key);
+  let found = null;
+  const abs = resolveSafe(key);
+  if (abs) {
+    try {
+      const entries = fs.readdirSync(abs);
+      for (const base of ART_BASENAMES) {
+        const hit = entries.find((e) => {
+          const lower = e.toLowerCase();
+          return isImageFile(lower) && lower.replace(/\.[^.]+$/, '') === base;
+        });
+        if (hit) { found = key ? `${key}/${hit}` : hit; break; }
+      }
+    } catch (err) { /* unreadable dir -> just no art */ }
+  }
+  folderArtCache.set(key, found);
+  return found;
+}
+
 // The feature is entirely optional -- no Music Path mapped means /music
 // simply doesn't exist, and everything here degrades to "disabled"
 // rather than erroring. Checked live (not cached at require-time) so a
@@ -145,6 +195,16 @@ function buildStreamUri(relPath) {
   return `${base}/stream/${encoded}`;
 }
 
+function buildArtUri(relPath) {
+  const base = getPublicBaseUrl();
+  if (!base) return null;
+  const encoded = String(relPath)
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+  return `${base}/art/${encoded}`;
+}
+
 // Best-effort display metadata straight from the path, assuming the
 // common Artist/Album/Track layout. Good enough for the Phase 1
 // hardware test (verifies DIDL metadata shows up on the panel/app);
@@ -156,10 +216,12 @@ function describeTrack(relPath) {
     .replace(/\.[^.]+$/, '')
     .replace(/^\d{1,3}\s*[-. ]\s*/, '')
     .trim() || file;
+  const artRel = findFolderArt(parts.slice(0, -1).join('/'));
   return {
     title,
     album: parts.length >= 2 ? parts[parts.length - 2] : undefined,
     artist: parts.length >= 3 ? parts[parts.length - 3] : undefined,
+    albumArtUrl: artRel ? buildArtUri(artRel) : undefined,
     mime: contentTypeFor(file)
   };
 }
@@ -214,6 +276,10 @@ module.exports = {
   isEnabled,
   isAudioFile,
   contentTypeFor,
+  isImageFile,
+  imageContentTypeFor,
+  findFolderArt,
+  buildArtUri,
   resolveSafe,
   getPublicBaseUrl,
   buildStreamUri,

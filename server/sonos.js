@@ -769,6 +769,17 @@ async function setGroupVolume(roomName, volume) {
 // different kind of playback starts in that room.
 const roomPlaylistContext = new Map();
 
+// Same idea for the Local Music Library: playTracksAsQueue remembers
+// what it queued (uri -> {title, artist, album, albumArtUrl}) so
+// getNowPlaying can recover display metadata, because -- confirmed on
+// real hardware for playlist queues, see the note inside getNowPlaying
+// -- Sonos returns EMPTY TrackMetaData for queue-based playback even
+// when real metadata was sent while building the queue. In-memory only:
+// a container restart mid-playback loses it (display falls back to
+// blank until something is re-queued). Phase 2's index makes this
+// recovery permanent by looking the URI up in the database instead.
+const roomLocalQueueContext = new Map();
+
 // Cached briefly (30s) since this gets checked on every now-playing
 // poll (every 1-2s) while a playlist plays -- same reasoning as the
 // Favorites cache above. Shared/general-purpose: also used directly by
@@ -982,6 +993,7 @@ async function getCachedPlaylistTrackByUri(roomName, playlistId, uri) {
 // problem than the reported bug (shuffle wrongly enabled on a stream).
 function isShuffleAvailable(uri, roomName) {
   if (roomPlaylistContext.has(roomName)) return true;
+  if (roomLocalQueueContext.has(roomName)) return true;
   return !!(uri && uri.startsWith('x-rincon-queue:'));
 }
 
@@ -1102,6 +1114,19 @@ async function getNowPlaying(roomName) {
         track.album = playlistTrack.album;
         track.albumArtURL = playlistTrack.albumArtUrl;
       }
+    }
+
+    // Same empty-TrackMetaData behavior, for the Local Music Library's
+    // own queue playback: recover title/artist/album/art from what
+    // playTracksAsQueue remembers queueing, matched by track URI.
+    const localQueue = roomLocalQueueContext.get(roomName);
+    if (localQueue && track.uri && localQueue.has(track.uri)) {
+      const localTrack = localQueue.get(track.uri);
+      if (!track.title) track.title = localTrack.title || '';
+      if (!track.artist) track.artist = localTrack.artist || '';
+      if (!track.album) track.album = localTrack.album || '';
+      if (!track.albumArtURL) track.albumArtURL = localTrack.albumArtUrl || null;
+      if (!sourceLine) sourceLine = 'Local Library';
     }
 
     return {
@@ -1631,6 +1656,7 @@ async function playItem(roomName, uri, metadata) {
   const device = findDevice(roomName);
   if (!device) return;
   roomPlaylistContext.delete(roomName);
+  roomLocalQueueContext.delete(roomName);
   debugLog.info('sonos', `playItem(${roomName}): ${metadata ? 'using item metadata' : 'no metadata available, falling back to bare URI'}`);
   await guarded(`playItem(${roomName})`, async () => {
     // Confirmed via real testing: calling setAVTransportURI right after
@@ -1697,6 +1723,7 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
+  roomLocalQueueContext.delete(roomName);
   await guarded(`playPlaylistTrack(${roomName})`, async () => {
     const tracks = await browseContainer(roomName, playlistContainerId);
     const playableTracks = tracks.filter((t) => t.uri);
@@ -1757,6 +1784,7 @@ async function playTracksAsQueue(roomName, tracks) {
     await device.selectQueue();
     await device.play();
   });
+  roomLocalQueueContext.set(roomName, new Map(tracks.map((t) => [t.uri, t])));
 }
 
 // targetRoomName = the room that will start playing (the one you had
@@ -1769,6 +1797,7 @@ async function playLineInFrom(targetRoomName, sourceRoomName) {
   const targetDevice = findDevice(targetRoomName);
   if (!targetDevice) return;
   roomPlaylistContext.delete(targetRoomName);
+  roomLocalQueueContext.delete(targetRoomName);
   await guarded(`playLineInFrom(${targetRoomName} <- ${sourceRoomName})`, async () => {
     const uuid = await getDeviceUUID(sourceRoomName);
     debugLog.info('sonos', `playLineInFrom: resolved sourceRoomName="${sourceRoomName}" -> uuid=${uuid}`);

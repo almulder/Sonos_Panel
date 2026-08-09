@@ -513,6 +513,30 @@ app.get('/stream/*', (req, res) => {
   });
 });
 
+// Album art endpoint -- same path rules as /stream/ but images only,
+// so the two routes can't be used to reach each other's file types.
+// Art is fetched by the speakers/app repeatedly, hence the cache header.
+app.get('/art/*', (req, res) => {
+  if (!localLibrary.isEnabled()) {
+    return res.status(503).json({ error: 'Local Music Library is not enabled' });
+  }
+  const abs = localLibrary.resolveSafe(req.params[0] || '');
+  if (!abs || !localLibrary.isImageFile(abs)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.sendFile(abs, {
+    dotfiles: 'deny',
+    headers: {
+      'Content-Type': localLibrary.imageContentTypeFor(abs),
+      'Cache-Control': 'public, max-age=86400'
+    }
+  }, (err) => {
+    if (err && !res.headersSent) {
+      res.status(err.statusCode === 404 || err.code === 'ENOENT' ? 404 : 500).end();
+    }
+  });
+});
+
 // TEST HARNESS: queue one or more local files on a room and play them.
 // Body: { "paths": ["Artist/Album/01 Song.flac", ...] } -- paths
 // relative to the music root. Builds full HTTP URIs + DIDL metadata and
