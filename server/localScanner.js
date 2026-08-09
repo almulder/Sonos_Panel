@@ -185,6 +185,13 @@ let unavailableReason = 'not initialized';
 let schedule = null;
 let scheduleTimer = null;
 let lastScheduleSlot = '';
+// Throttle for the periodic progress LOG line (WebSocket progress is
+// separate and fires per batch) -- exists because a first full scan of
+// a big library over the fuse layer can run for an hour+, and a log
+// that says nothing between "Scan starting" and "Scan complete" is
+// indistinguishable from a hang.
+const PROGRESS_LOG_INTERVAL_MS = 30000;
+let lastProgressLogMs = 0;
 
 const scanState = {
   state: 'idle', // 'idle' | 'enumerating' | 'scanning'
@@ -361,6 +368,9 @@ async function enumerateFiles() {
         if (found.length % 5000 === 0) {
           emitProgress({ state: 'enumerating', total: found.length });
         }
+        if (found.length % 10000 === 0) {
+          debugLog.info('scanner', `Enumerating: ${found.length} files found so far...`);
+        }
       }
     }
   }
@@ -497,9 +507,12 @@ async function runScan() {
   const mm = require('music-metadata');
   const generation = Date.now();
 
+  const enumerateStartMs = Date.now();
   const files = await enumerateFiles();
   scanState.total = files.length;
   scanState.state = 'scanning';
+  debugLog.info('scanner', `Enumerated ${files.length} candidate file(s) in ${Math.round((Date.now() - enumerateStartMs) / 1000)}s; scanning with concurrency ${PARSE_CONCURRENCY}...`);
+  lastProgressLogMs = Date.now();
   emitProgress({});
 
   let nextIndex = 0;
@@ -511,6 +524,11 @@ async function runScan() {
       await processFile(files[i], generation, mm);
       scanState.processed += 1;
       commitBatch(generation, false);
+      if (Date.now() - lastProgressLogMs >= PROGRESS_LOG_INTERVAL_MS) {
+        lastProgressLogMs = Date.now();
+        const pct = scanState.total ? Math.round((scanState.processed / scanState.total) * 100) : 0;
+        debugLog.info('scanner', `Scan progress: ${scanState.processed}/${scanState.total} (${pct}%) -- ${scanState.indexed} indexed/updated, ${scanState.incompatible} incompatible, ${scanState.skippedUnchanged} unchanged`);
+      }
     }
   };
   await Promise.all(Array.from({ length: PARSE_CONCURRENCY }, () => worker()));
