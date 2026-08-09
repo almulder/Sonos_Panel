@@ -22,7 +22,13 @@ This container needs a `br0` network using **ipvlan** mode. If you already run o
 - **Network Type**: select `br0`
 - **Fixed IP Address**: enter a free IP address on your LAN — pick something outside your router's DHCP range so it doesn't get double-assigned
 - **AppData Config Path**: defaults to `/mnt/user/appdata/Sonos_Panel` — change if you want config stored elsewhere
+- **Music Path** *(optional)*: point this at a folder of music files on this server (e.g. `/mnt/user/Media/Music`) to enable the Local Music Library — the panel streams your files straight to the speakers, with no Sonos 65,000-song index limit. Leave blank to skip the feature entirely. The mount is read-only; the panel never touches your files. Enter the **Linux path** (use the folder-picker button), not a Windows `\\SERVER\share` path — UNC paths are Windows syntax and don't work inside a Linux container.
+- **Public Base URL** *(optional)*: leave blank. It auto-detects the container's fixed `br0` IP, which is exactly what the speakers need. Only set it if local music files fail to play.
 - Leave the advanced port/data-dir settings at their defaults unless you know you need to change them
+
+### Music on a different machine?
+
+The answer still isn't SMB-in-the-container. Mount the remote share on the Unraid **host** with the **Unassigned Devices** plugin (it shows up under `/mnt/remotes/...`) and point that same single Music Path field at it. Host handles the mounting; container stays dumb and fast.
 
 ## 4. Apply and access
 

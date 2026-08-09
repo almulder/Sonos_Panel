@@ -12,6 +12,8 @@ around the house.
 - Play/pause/skip, volume (individual room or synced across a group)
 - Group and ungroup rooms by selecting several and confirming
 - Browse and play Favorites, Playlists, and Line-In sources
+- Local Music Library (preview): stream your own music files straight
+  from the server to the speakers -- no Sonos 65,000-song index limit
 - Album art, track/artist, and source info while playing
 - An ambient screensaver after a period of inactivity -- bouncing
   now-playing display while something's playing, a slow color-cycling
@@ -72,6 +74,8 @@ wall panel without any special kiosk software.
 | `TAB2_TITLE`, `TAB2_COLOR`, `TAB2_ICON`, `TAB2_URL` | *(unset)* | An extra tab embedding another local dashboard in an iframe. Only `_URL` is required -- `_TITLE` falls back to "Tab 2", `_COLOR` falls back to `THEME_COLOR`, and `_ICON` (emoji or image URL, shown at the start of the tab) is simply omitted if blank. Leave `_URL` unset to not show this tab at all. |
 | `TAB3_TITLE`, `TAB3_COLOR`, `TAB3_ICON`, `TAB3_URL` | *(unset)* | Same as above, for a third tab. |
 | `TAB4_TITLE`, `TAB4_COLOR`, `TAB4_ICON`, `TAB4_URL` | *(unset)* | Same as above, for a fourth tab. |
+| `MUSIC_DIR` | `/music` | Container-side path of the Local Music Library mount. Leave as-is and just volume-mount your music folder to `/music` (the Unraid template's **Music Path** field does exactly this). |
+| `PUBLIC_BASE_URL` | *(unset = auto-detect)* | Local Music Library only: the URL the **speakers** use to fetch audio from the panel. Auto-detection uses the container's own LAN IP, which is correct on ipvlan (`br0`) or host networking. Set explicitly (e.g. `http://10.1.10.25:3000`) only if local files fail to play. |
 
 No other configuration needed -- Sonos speakers are auto-discovered on
 the local network at startup.
@@ -105,12 +109,96 @@ header) won't display -- this is essentially never an issue for
 self-hosted local dashboards like Hubitat or Home Assistant, which
 don't set those headers by default.
 
+## Local Music Library (preview)
+
+Sonos's built-in Music Library caps out at roughly **65,000 tracks** --
+a hard limit, because the index is stored in the speakers' own limited
+memory. If your collection is bigger than that, Sonos simply refuses to
+index the rest.
+
+This feature sidesteps the limit entirely by inverting who does the
+work: the **panel** (which runs on a real server with real storage)
+owns the library, and the speakers just play plain HTTP audio streams
+served by the panel. The speakers never index anything, so there is no
+track limit anywhere -- 200,000 songs is just a bigger database file on
+the server.
+
+### Setup
+
+Mount a folder of music files at `/music` (read-only). On Unraid,
+that's the template's **Music Path** field -- click it, browse to your
+music share (e.g. `/mnt/user/Media/Music`), done. With docker compose,
+uncomment the `/music` volume line in `docker-compose.yml`. No mount =
+feature silently disabled; nothing else about the panel changes.
+
+Note that the path must be the **Linux path on the server itself**
+(`/mnt/user/Media/Music`), not a Windows-style UNC path
+(`\\SERVER\Media\Music`). Those are two views of the same folder --
+the UNC path is just how Windows sees it through Samba -- and since the
+container runs *on* the server, it reads the disks directly rather than
+looping through SMB. UNC paths don't work inside a Linux container at
+all.
+
+**If the music lives on a different machine:** the answer still isn't
+SMB-in-the-container. Mount the remote share on the Unraid **host**
+with the Unassigned Devices plugin (it shows up under
+`/mnt/remotes/...`) and point that same single Music Path field at it.
+Host handles the mounting; container stays dumb and fast.
+
+`PUBLIC_BASE_URL` usually needs no attention: the panel auto-detects
+its own LAN address, which is correct on ipvlan (`br0`, the recommended
+Unraid setup) and host networking, and logs what it picked at startup.
+It exists as an override for unusual network setups where the speakers
+need a different address to reach the panel than the auto-detected one.
+
+Heads-up on trust: anything that can reach the panel on your LAN can
+also fetch these streams -- same open-on-the-LAN model as the panel
+itself, just now including your music files. The mount is read-only,
+so nothing can be modified either way.
+
+### Current status: Phase 1 of 4
+
+This is being built foundation-first, verified on real hardware at each
+step:
+
+1. **Streaming (this release):** the `/stream/` endpoint serves audio
+   with HTTP Range support (required for seeking), correct
+   content-types for Sonos, and a test endpoint to queue local files on
+   a room -- proving playback, seeking, metadata display, and
+   track-to-track transitions on real speakers before anything is built
+   on top.
+2. **Indexing:** a background scanner reads the embedded tags of every
+   file into a local database, with incremental rescans (only changed
+   files are re-read) and progress shown in the panel.
+3. **Browsing:** Artists / Albums / Songs / Composers / Genres /
+   Folders tabs for the local library, presented identically to the
+   Sonos Music Library the panel already browses -- plus search, which
+   gets *better* than Sonos's (real substring matching instead of
+   prefix-only).
+4. **Local playlists:** create/edit playlists of local tracks, mirroring
+   the existing Sonos Playlists UI, with none of Sonos's playlist size
+   limits.
+
+Phase 1 test endpoints (`/api/local/status`, `/api/local/ls`,
+`/api/local/room/<room>/test-play`) are a temporary harness and may
+change; the `/stream/` URL format is intended to be permanent.
+
+Known constraints worth knowing up front: Sonos S2 plays FLAC up to
+24-bit/48kHz (hi-res 24/96+ files would need a transcoding step --
+possible later, not in scope yet), and gapless playback of HTTP-queued
+tracks is exactly what Phase 1's hardware test exists to measure. Local
+tracks also stream *through the panel*, so unlike Sonos's own library
+(where speakers read the SMB share directly), the container needs to be
+running for local music to play -- on an always-on server this is
+usually academic, but it's a real difference.
+
 ## How it's built
 
 ```
 server/
   index.js       Express app, all HTTP routes, WebSocket broadcast, poll loop
   sonos.js       All Sonos/UPnP logic: discovery, control, browsing, caching
+  localLibrary.js  Local Music Library: safe path handling + HTTP audio streaming (preview)
   debugLog.js    Lightweight in-memory log buffer (feeds console/docker logs)
 
 public/

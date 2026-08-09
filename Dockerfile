@@ -44,6 +44,13 @@ ENV TAB4_URL=""
 # a host path (see docker-compose.yml / the Unraid template) so it
 # survives container recreation/updates rather than resetting.
 ENV DATA_DIR=/app/data
+# Local Music Library (optional): MUSIC_DIR is where the container
+# expects the music volume-mount (fixed at /music by the template /
+# compose file -- override only for local development). PUBLIC_BASE_URL
+# is the address the SPEAKERS fetch audio from; blank = auto-detect the
+# container's LAN IP, which is correct on ipvlan/host networking.
+ENV MUSIC_DIR=/music
+ENV PUBLIC_BASE_URL=""
 EXPOSE 3000
 
 CMD ["node", "server/index.js"]

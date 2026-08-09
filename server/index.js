@@ -3,11 +3,13 @@
 // Run with: npm install && npm start
 // Then open http://localhost:3000
 
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 
 const sonos = require('./sonos');
+const localLibrary = require('./localLibrary');
 const debugLog = require('./debugLog');
 
 const PORT = process.env.PORT || 3000;
@@ -458,11 +460,96 @@ app.post('/api/sonos/room/:room/loudness', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------------- Local Music Library (Phase 1: streaming) ----------------
+// See server/localLibrary.js for the why. These four routes are the
+// hardware-verification harness: prove real speakers will play, seek,
+// and chain tracks served from here BEFORE building the scanner/index/
+// browse UI on top. The /api/local/* shapes may still change; /stream/
+// is intended to be the stable, permanent audio URL format.
+
+app.get('/api/local/status', (req, res) => {
+  const enabled = localLibrary.isEnabled();
+  res.json({
+    enabled,
+    musicDir: localLibrary.MUSIC_DIR,
+    streamBase: enabled ? localLibrary.getPublicBaseUrl() : null,
+    publicBaseUrlSource: process.env.PUBLIC_BASE_URL ? 'env' : 'auto-detect',
+    phase: 1
+  });
+});
+
+// Browse the raw folder tree -- lets you find test file paths without
+// shelling into the container. ?dir= is relative to the music root.
+app.get('/api/local/ls', (req, res) => {
+  if (!localLibrary.isEnabled()) {
+    return res.status(503).json({ error: 'Local Music Library is not enabled (no Music Path mounted)' });
+  }
+  const listing = localLibrary.listDir(req.query.dir || '');
+  if (!listing) return res.status(404).json({ error: 'Folder not found (or path not allowed)' });
+  res.json(listing);
+});
+
+// The actual audio endpoint the SPEAKERS fetch from. res.sendFile
+// handles HTTP Range requests (partial content) automatically, which
+// Sonos requires for seeking within a track. Content-Type comes from
+// our own explicit map (see localLibrary.js) rather than a generic
+// mime lookup, passed via options.headers which Express applies last.
+app.get('/stream/*', (req, res) => {
+  if (!localLibrary.isEnabled()) {
+    return res.status(503).json({ error: 'Local Music Library is not enabled' });
+  }
+  const rel = req.params[0] || '';
+  const abs = localLibrary.resolveSafe(rel);
+  if (!abs || !localLibrary.isAudioFile(abs)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.sendFile(abs, {
+    dotfiles: 'deny',
+    headers: { 'Content-Type': localLibrary.contentTypeFor(abs) }
+  }, (err) => {
+    if (err && !res.headersSent) {
+      res.status(err.statusCode === 404 || err.code === 'ENOENT' ? 404 : 500).end();
+    }
+  });
+});
+
+// TEST HARNESS: queue one or more local files on a room and play them.
+// Body: { "paths": ["Artist/Album/01 Song.flac", ...] } -- paths
+// relative to the music root. Builds full HTTP URIs + DIDL metadata and
+// runs the same flush -> queue -> selectQueue -> play sequence the
+// playlist playback path already uses, so what this verifies is exactly
+// what the real feature will do. NOTE: replaces the room's current
+// queue, deliberately -- it's a test endpoint, not the final UX.
+app.post('/api/local/room/:room/test-play', asyncHandler(async (req, res) => {
+  if (!localLibrary.isEnabled()) {
+    return res.status(503).json({ error: 'Local Music Library is not enabled' });
+  }
+  const paths = Array.isArray(req.body.paths) ? req.body.paths : [];
+  if (paths.length === 0 || paths.length > 50) {
+    return res.status(400).json({ error: 'Provide 1-50 relative file paths in "paths"' });
+  }
+  if (!localLibrary.getPublicBaseUrl()) {
+    return res.status(500).json({ error: 'No stream base URL -- set PUBLIC_BASE_URL' });
+  }
+  const tracks = [];
+  for (const rel of paths) {
+    const abs = localLibrary.resolveSafe(rel);
+    if (!abs || !localLibrary.isAudioFile(abs) || !fs.existsSync(abs)) {
+      return res.status(400).json({ error: `Not a playable file under the music root: ${rel}` });
+    }
+    tracks.push({ uri: localLibrary.buildStreamUri(rel), ...localLibrary.describeTrack(rel) });
+  }
+  await sonos.playTracksAsQueue(req.params.room, tracks);
+  triggerSonosFastPoll([req.params.room]);
+  res.json({ ok: true, queued: tracks.map((t) => ({ title: t.title, uri: t.uri })) });
+}));
+
 // ---------------- Boot ----------------
 
 async function main() {
   debugLog.info('server', 'Initializing Sonos...');
   await sonos.init();
+  localLibrary.logStartupState();
 
   const server = app.listen(PORT, () => {
     debugLog.info('server', `Listening on http://localhost:${PORT}`);

@@ -1713,6 +1713,52 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
   });
 }
 
+// Like buildTrackMetadata above, but for tracks streamed from the
+// panel's OWN Local Music Library (plain http:// URIs served by our
+// /stream/ route) rather than a Sonos service. The one addition is the
+// <res protocolInfo=...> element: service URIs (x-sonos-http) carry
+// their format info out-of-band, but for a plain HTTP URL from an
+// unknown server, protocolInfo is how the speaker is told what codec
+// to expect -- belt-and-suspenders alongside the Content-Type header
+// the /stream/ route also sends.
+function buildLocalTrackMetadata(track) {
+  const title = Helpers.EncodeXml(track.title || 'Unknown');
+  const artistTag = track.artist ? `<dc:creator>${Helpers.EncodeXml(track.artist)}</dc:creator>` : '';
+  const albumTag = track.album ? `<upnp:album>${Helpers.EncodeXml(track.album)}</upnp:album>` : '';
+  const artTag = track.albumArtUrl ? `<upnp:albumArtURI>${Helpers.EncodeXml(track.albumArtUrl)}</upnp:albumArtURI>` : '';
+  const mime = track.mime || 'audio/mpeg';
+  const resTag = `<res protocolInfo="http-get:*:${mime}:*">${Helpers.EncodeXml(track.uri)}</res>`;
+  return (
+    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">' +
+    `<item id="-1" parentID="-1" restricted="true"><dc:title>${title}</dc:title>${artistTag}${albumTag}${artTag}${resTag}` +
+    '<upnp:class>object.item.audioItem.musicTrack</upnp:class></item></DIDL-Lite>'
+  );
+}
+
+// Queue an arbitrary list of tracks (each {uri, title, artist, album,
+// albumArtUrl, mime}) and start playing from the first one. Same
+// verified flush -> queue -> selectQueue -> play sequence as
+// playPlaylistTrack -- sequential queue() calls on purpose, same
+// UpdateID-ordering reason as everywhere else. Currently the Local
+// Music Library test harness's playback path; becomes the real local-
+// library playback primitive in later phases. Throws on an unknown
+// room (unlike playItem's silent return) because its caller is an API
+// endpoint where a clear 500 beats silently doing nothing.
+async function playTracksAsQueue(roomName, tracks) {
+  if (usingMock) return;
+  const device = findDevice(roomName);
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  roomPlaylistContext.delete(roomName);
+  await guarded(`playTracksAsQueue(${roomName})`, async () => {
+    await device.flush();
+    for (const track of tracks) {
+      await device.queue({ uri: track.uri, metadata: buildLocalTrackMetadata(track) });
+    }
+    await device.selectQueue();
+    await device.play();
+  });
+}
+
 // targetRoomName = the room that will start playing (the one you had
 // focused when you opened Sources)
 // sourceRoomName = whose physical line-in input to relay (what you
@@ -2014,6 +2060,7 @@ module.exports = {
   getCachedContainerItems,
   playItem,
   playPlaylistTrack,
+  playTracksAsQueue,
   playLineInFrom,
   isMock
 };

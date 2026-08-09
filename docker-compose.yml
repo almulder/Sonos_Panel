@@ -13,6 +13,14 @@ services:
     # as-is, it matches DATA_DIR set in the Dockerfile.
     volumes:
       - /mnt/user/appdata/sonos-panel:/app/data
+      # OPTIONAL -- Local Music Library: mount a folder of music files
+      # (read-only) to stream them straight to the speakers with no
+      # Sonos 65,000-song index limit. Must be a path visible on THIS
+      # host -- if the music lives on another machine, mount that share
+      # on the host first (on Unraid: Unassigned Devices plugin ->
+      # /mnt/remotes/...) and point this at the mount. \\server\share
+      # UNC paths are Windows syntax and won't work in the container.
+      # - /mnt/user/Media/Music:/music:ro
 
     # REQUIRED, not optional: Sonos discovery uses SSDP (UDP multicast)
     # to find speakers on the local network. Docker's default bridge
@@ -35,6 +43,11 @@ services:
       - THEME_COLOR=#e8a33d
       # Seconds of no touch/click before the screensaver activates.
       - SCREENSAVER_TIMEOUT_SECONDS=600
+      # Local Music Library only: the URL the SPEAKERS fetch audio
+      # from. Leave unset to auto-detect the LAN IP (correct for host
+      # networking / ipvlan). Set explicitly only if local files fail
+      # to play.
+      # - PUBLIC_BASE_URL=http://10.1.10.25:3000
       # Up to three extra tabs, each embedding another local dashboard
       # (Hubitat, Home Assistant, etc.) alongside the built-in Sonos
       # tab. A tab only shows up if its _URL is set -- leave all four
