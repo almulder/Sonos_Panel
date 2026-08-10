@@ -486,6 +486,61 @@ app.post('/api/sonos/room/:room/loudness', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------------- Queue management ----------------
+app.get('/api/sonos/room/:room/queue', asyncHandler(async (req, res) => {
+  const start = parseInt(req.query.start, 10) || 0;
+  res.json(await sonos.getQueue(req.params.room, start));
+}));
+
+// Add to queue: single track {uri, metadata} or a whole container
+// {containerId} -- local L: albums, Sonos playlists, library albums all
+// work, capped at 500 tracks. mode: 'now' (insert after current + jump,
+// keeps the rest of the queue), 'next', or 'end' (default).
+app.post('/api/sonos/room/:room/queue/add', asyncHandler(async (req, res) => {
+  const { mode, uri, metadata, containerId } = req.body;
+  const m = ['now', 'next', 'end'].includes(mode) ? mode : 'end';
+  const result = containerId
+    ? await sonos.addContainerToQueue(req.params.room, containerId, m)
+    : await sonos.addTracksToQueue(req.params.room, [{ uri, metadata }], m);
+  if (m === 'now') triggerSonosFastPoll([req.params.room]);
+  res.json(result);
+}));
+
+app.post('/api/sonos/room/:room/queue/remove', asyncHandler(async (req, res) => {
+  const trackNo = parseInt(req.body.trackNo, 10);
+  if (!trackNo || trackNo < 1) return res.status(400).json({ error: 'trackNo (1-based) required' });
+  await sonos.removeQueueTrack(req.params.room, trackNo);
+  res.json({ ok: true });
+}));
+
+app.post('/api/sonos/room/:room/queue/move', asyncHandler(async (req, res) => {
+  const from = parseInt(req.body.from, 10);
+  const insertBefore = parseInt(req.body.insertBefore, 10);
+  if (!from || !insertBefore) return res.status(400).json({ error: 'from and insertBefore (1-based) required' });
+  await sonos.moveQueueTrack(req.params.room, from, insertBefore);
+  res.json({ ok: true });
+}));
+
+app.post('/api/sonos/room/:room/queue/clear', asyncHandler(async (req, res) => {
+  await sonos.clearQueue(req.params.room);
+  res.json({ ok: true });
+}));
+
+app.post('/api/sonos/room/:room/queue/jump', asyncHandler(async (req, res) => {
+  const trackNo = parseInt(req.body.trackNo, 10);
+  if (!trackNo || trackNo < 1) return res.status(400).json({ error: 'trackNo (1-based) required' });
+  await sonos.jumpToQueueTrack(req.params.room, trackNo);
+  triggerSonosFastPoll([req.params.room]);
+  res.json({ ok: true });
+}));
+
+// Called on group-slider grab so Sonos snapshots member ratios before
+// the drag's SetGroupVolume stream (balance survives a trip to zero).
+app.post('/api/sonos/room/:room/group-volume/snapshot', asyncHandler(async (req, res) => {
+  await sonos.snapshotGroupVolume(req.params.room);
+  res.json({ ok: true });
+}));
+
 // ---------------- Local Music Library (Phase 1: streaming) ----------------
 // See server/localLibrary.js for the why. These four routes are the
 // hardware-verification harness: prove real speakers will play, seek,
@@ -686,6 +741,11 @@ async function main() {
   // so on an already-indexed library this is quick. Runs AFTER the
   // server is listening so the panel is usable immediately.
   if (scannerReady) localScanner.startScan('startup');
+
+  // Live change events -> clients: queue edits (from anywhere,
+  // including the phone app) and favorites/playlists changes.
+  sonos.setQueueChangedCallback((room) => broadcast({ type: 'queue:changed', room: room || null }));
+  sonos.setLibraryChangedCallback((what) => broadcast({ type: 'library:changed', ...what }));
 
   // Real-time push updates from sonos.js (PlayState/Volume/Muted/topology
   // events) call this the instant something changes, independent of

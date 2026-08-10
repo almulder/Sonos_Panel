@@ -43,6 +43,15 @@
   // nothing extra is needed here beyond wiring the rail's own
   // change/mute events through to it.
 
+  VolumeRail.onDragStart(() => {
+    // Lock in group member volume ratios before the drag's stream of
+    // SetGroupVolume calls -- balance survives a trip to zero. Server
+    // no-ops harmlessly for ungrouped rooms.
+    const room = SonosView.getFocusedRoom && SonosView.getFocusedRoom();
+    if (!room) return;
+    fetch(`/api/sonos/room/${encodeURIComponent(room)}/group-volume/snapshot`, { method: 'POST' })
+      .catch(() => {});
+  });
   VolumeRail.onChange(async (value) => {
     await SonosView.setFocusedRoomVolume(value);
   });
@@ -67,8 +76,11 @@
         SonosView.refreshFromSocket(msg.rooms);
       } else if (msg.type === 'sonos:nowplaying-changed') {
         SonosView.handleNowPlayingChanged(msg.room);
+        if (window.QueuePanel) window.QueuePanel.handleNowPlayingChanged(msg.room);
       } else if (msg.type === 'sonos:groupvolume-changed') {
         SonosView.handleGroupVolumeChanged();
+      } else if (msg.type === 'queue:changed') {
+        if (window.QueuePanel) window.QueuePanel.handleQueueChanged(msg.room);
       }
     });
   }

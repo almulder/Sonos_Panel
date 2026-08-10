@@ -49,6 +49,7 @@
 
             <div class="nowplaying" id="sonosNowPlaying">
               <button class="nowplaying__fullscreen-btn" id="sonosFullscreenBtn" aria-label="Full screen">&#x2922;</button>
+              <button class="nowplaying__queue-btn" id="sonosQueueBtn" aria-label="Up next" title="Up next">&#9776;</button>
               <div class="sleeptimer" id="sonosSleepTimerWrap">
                 <button class="sleeptimer__btn" id="sonosSleepTimerBtn" aria-label="Sleep timer">
                   <img src="icons/sleep-timer.png" alt="" class="sleeptimer__icon" />
@@ -130,11 +131,36 @@
 
   </div>
 
+  <div class="queuepanel" id="queuePanel" style="display: none;">
+    <div class="queuepanel__sheet">
+      <div class="queuepanel__header">
+        <p class="queuepanel__title" id="queuePanelTitle">UP NEXT</p>
+        <button class="queuepanel__close" id="queuePanelClose" aria-label="Close">&#10005;</button>
+      </div>
+      <div class="queuepanel__actions">
+        <button class="queuepanel__actionbtn" id="queueSaveBtn">Save as playlist</button>
+        <button class="queuepanel__actionbtn queuepanel__actionbtn--danger" id="queueClearBtn">Clear queue</button>
+      </div>
+      <ul class="queuepanel__items" id="queuePanelItems"></ul>
+    </div>
+  </div>
+
+  <div class="queueactions" id="queueActions" style="display: none;">
+    <div class="queueactions__sheet">
+      <p class="queueactions__label" id="queueActionsLabel"></p>
+      <button class="queueactions__btn" data-mode="now">Play now</button>
+      <button class="queueactions__btn" data-mode="next">Play next</button>
+      <button class="queueactions__btn" data-mode="end">Add to queue</button>
+      <button class="queueactions__btn queueactions__btn--cancel" id="queueActionsCancel">Cancel</button>
+    </div>
+  </div>
+
   <script src="js/config.js"></script>
   <script src="js/theme.js"></script>
   <script src="js/tabs.js"></script>
   <script src="js/volumeRail.js"></script>
   <script src="js/progressBar.js"></script>
+  <script src="js/queuePanel.js"></script>
   <script src="js/sonosView.js"></script>
   <script src="js/screensaver.js"></script>
   <script src="js/app.js"></script>

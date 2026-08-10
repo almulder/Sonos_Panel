@@ -17,6 +17,7 @@ const VolumeRail = (() => {
   let dragging = false;
   let onChangeCallback = null; // (value) => void, called on release
   let onMuteCallback = null; // (muted) => void
+  let onDragStartCallback = null; // () => void, called the moment the rail is grabbed
 
   function render() {
     const displayValue = muted ? 0 : value;
@@ -35,6 +36,11 @@ const VolumeRail = (() => {
   function handlePointerDown(e) {
     dragging = true;
     track.setPointerCapture(e.pointerId);
+    // Fired BEFORE any volume changes so the listener can snapshot
+    // group member ratios (SnapshotGroupVolume) ahead of the drag.
+    if (onDragStartCallback) {
+      try { onDragStartCallback(); } catch (err) { /* never block the drag */ }
+    }
     if (muted) {
       muted = false;
       if (onMuteCallback) onMuteCallback(false);
@@ -80,6 +86,9 @@ const VolumeRail = (() => {
     },
     getValue() {
       return value;
+    },
+    onDragStart(cb) {
+      onDragStartCallback = cb;
     },
     onChange(cb) {
       onChangeCallback = cb;

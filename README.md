@@ -197,13 +197,21 @@ step:
    and browse pages render faster because no filesystem lookups happen
    per row. Dropping a cover image into a folder later is picked up by
    the next scan and outranks the extracted one.
-4. **Queue management (planned next):** an "Up Next" view, Play Now /
-   Play Next / Add to Queue on local tracks and albums, remove/reorder,
-   plus live refresh of favorites/playlists/queue via ContentDirectory
-   events. (A separate panel-native playlist system was originally
-   planned here, but Sonos playlists now store local tracks with full
-   metadata -- so it's only worth building if Sonos-side limits ever
-   bite.)
+4. **Queue management -- DONE (this release):** an "Up Next" panel
+   (queue button beside the fullscreen control) showing the focused
+   room's group queue with the current track highlighted -- tap a track
+   to jump, per-row move up/down and remove, Clear, and Save-as-playlist.
+   Every browse row (tracks AND albums, local or Sonos library) gains a
+   vertical-ellipsis button opening **Play Now / Play Next / Add to
+   Queue** -- Play Now inserts after the current track and jumps,
+   preserving the rest of the queue instead of replacing the world.
+   Favorites, playlists, and the queue now also refresh live via
+   ContentDirectory/Queue events when edited from anywhere (including
+   the phone app), and grabbing the group volume slider snapshots
+   member ratios first so balance survives a drag to zero. (A separate
+   panel-native playlist system was originally planned here, but Sonos
+   playlists store local tracks with full metadata since v0.5.2 -- only
+   worth building if Sonos-side limits ever bite.)
 5. **Transcoding (planned), two flavors:** a transparent
    transcode-on-play path with an on-disk cache, so hi-res files play
    on Sonos without ever modifying the originals -- and a separate

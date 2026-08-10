@@ -152,6 +152,12 @@ const SonosView = (() => {
   const playPauseBtn = document.getElementById('sonosPlayPause');
   const prevBtn = document.getElementById('sonosPrev');
   const nextBtn = document.getElementById('sonosNext');
+  const queueBtn = document.getElementById('sonosQueueBtn');
+  if (queueBtn) {
+    queueBtn.addEventListener('click', () => {
+      if (focusedRoom && window.QueuePanel) window.QueuePanel.open(focusedRoom);
+    });
+  }
   const shuffleBtn = document.getElementById('sonosShuffleBtn');
   const crossfadeBtn = document.getElementById('sonosCrossfadeBtn');
   const sleepTimerBtn = document.getElementById('sonosSleepTimerBtn');
@@ -1589,6 +1595,23 @@ const SonosView = (() => {
     });
   }
 
+  // The vertical-ellipsis button on browse rows: opens the Play Now /
+  // Play Next / Add to Queue sheet (queuePanel.js) for a track or a
+  // whole album/container.
+  function buildQueueButton(label, payload) {
+    const btn = document.createElement('button');
+    btn.className = 'sourcepanel__queuebtn';
+    btn.innerHTML = '&#8942;';
+    btn.setAttribute('aria-label', `Queue options for ${label}`);
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (window.QueuePanel && focusedRoom) {
+        window.QueuePanel.showActions({ label, room: focusedRoom, ...payload });
+      }
+    });
+    return btn;
+  }
+
   function buildAddToPlaylistButton(label, payload) {
     const btn = document.createElement('button');
     btn.className = 'sourcepanel__addbtn';
@@ -1794,6 +1817,7 @@ const SonosView = (() => {
         // Skipped for the big index categories -- "add all of Artists"
         // isn't a meaningful action.
         if (state.categoryId !== state.containerId || state.categoryId === 'A:ALBUM') {
+          li.appendChild(buildQueueButton(item.title, { containerId: item.id }));
           li.appendChild(buildAddToPlaylistButton(item.title, { containerId: item.id }));
         }
       } else if (item.uri) {
@@ -1822,6 +1846,7 @@ const SonosView = (() => {
           await openSourceGroups();
           setTimeout(refreshNowPlaying, 800);
         });
+        li.appendChild(buildQueueButton(item.title, { uri: item.uri, metadata: item.metadata }));
         li.appendChild(buildAddToPlaylistButton(item.title, { uri: item.uri, metadata: item.metadata }));
       }
 

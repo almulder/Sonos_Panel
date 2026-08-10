@@ -375,6 +375,21 @@ function attachDeviceEventListeners(name, device) {
       debugLog.warn('sonos', `Error handling GroupRenderingControl event for ${name}: ${err.message}`);
     }
   });
+
+  // Queue service events fire when THIS device's queue changes (adds,
+  // removes, reorders -- from the panel or anyone else's phone). Only
+  // meaningful when the device is a coordinator, but attaching
+  // everywhere is harmless and grouping can change at any time.
+  device.on('Queue', () => {
+    try {
+      invalidateContainerCache('Q:0');
+      if (queueChangedCallback) queueChangedCallback(name);
+    } catch (err) {
+      debugLog.warn('sonos', `Error handling Queue event for ${name}: ${err.message}`);
+    }
+  });
+
+  attachContentDirectoryListener();
 }
 
 // Attached once, globally -- not per-device. The library subscribes to
@@ -747,6 +762,21 @@ async function getGroupVolume(roomName) {
   return guarded(`getGroupVolume(${roomName})`, async () => {
     const groupRendering = new Services.GroupRenderingControl(device.host, device.port);
     return groupRendering.GetGroupVolume();
+  });
+}
+
+// Called when the user GRABS the group slider, before the drag's
+// stream of SetGroupVolume calls. Locks in the members' current volume
+// ratios so a drag down to zero and back up restores the original
+// balance instead of flattening every room to the same level -- the
+// same thing the official app does on slider touch.
+async function snapshotGroupVolume(roomName) {
+  if (usingMock) return;
+  const device = findDevice(coordinatorNameFor(roomName));
+  if (!device) return;
+  await guarded(`snapshotGroupVolume(${roomName})`, async () => {
+    const groupRendering = new Services.GroupRenderingControl(device.host, device.port);
+    await groupRendering._request('SnapshotGroupVolume', { InstanceID: 0 });
   });
 }
 
@@ -1811,6 +1841,204 @@ function buildLocalTrackMetadata(track) {
 // library playback primitive in later phases. Throws on an unknown
 // room (unlike playItem's silent return) because its caller is an API
 // endpoint where a clear 500 beats silently doing nothing.
+// ---------------- Queue management (v0.7.0) ----------------
+// All queue operations target the room's GROUP COORDINATOR -- the
+// queue lives there; members are slaved. lastCoordinatorMap is kept
+// current by the topology listener.
+function coordinatorNameFor(roomName) {
+  return lastCoordinatorMap[roomName] || roomName;
+}
+
+let queueChangedCallback = null;
+function setQueueChangedCallback(cb) { queueChangedCallback = cb; }
+let libraryChangedCallback = null;
+function setLibraryChangedCallback(cb) { libraryChangedCallback = cb; }
+
+// Live change events. ContentDirectory is a HOUSEHOLD-WIDE subscription
+// the library makes once (same mechanism as ZoneGroupTopology), and its
+// notifications carry FavoritesUpdateID / SavedQueuesUpdateID /
+// ContainerUpdateIDs -- so favorites or playlists edited from the phone
+// app invalidate the panel's caches the moment they change instead of
+// waiting out a TTL. Queue changes additionally arrive per-device via
+// the Queue service event attached in attachDeviceEventListeners.
+let cdListenerAttached = false;
+let lastCdFavoritesId = null;
+let lastCdPlaylistsId = null;
+function attachContentDirectoryListener() {
+  if (cdListenerAttached) return;
+  cdListenerAttached = true;
+  Listener.on('ContentDirectory', (evt) => {
+    try {
+      const flat = {};
+      const src = Array.isArray(evt && evt.eventBody) ? evt.eventBody : [evt && evt.eventBody];
+      for (const el of src) {
+        if (el && typeof el === 'object') {
+          for (const k of Object.keys(el)) flat[k] = el[k];
+        }
+      }
+      if (flat.FavoritesUpdateID && flat.FavoritesUpdateID !== lastCdFavoritesId) {
+        lastCdFavoritesId = flat.FavoritesUpdateID;
+        invalidateContainerCache('FV:2');
+        if (libraryChangedCallback) libraryChangedCallback({ favorites: true });
+      }
+      if (flat.SavedQueuesUpdateID && flat.SavedQueuesUpdateID !== lastCdPlaylistsId) {
+        lastCdPlaylistsId = flat.SavedQueuesUpdateID;
+        invalidateContainerCache('SQ:');
+        if (libraryChangedCallback) libraryChangedCallback({ playlists: true });
+      }
+      if (typeof flat.ContainerUpdateIDs === 'string' && flat.ContainerUpdateIDs.includes('Q:0')) {
+        invalidateContainerCache('Q:0');
+        if (queueChangedCallback) queueChangedCallback(null);
+      }
+    } catch (err) {
+      debugLog.warn('sonos', `ContentDirectory event error: ${err.message}`);
+    }
+  });
+  debugLog.info('sonos', 'Live library events attached (favorites/playlists/queue refresh on change)');
+}
+
+async function getQueue(roomName, start = 0) {
+  if (usingMock) {
+    const items = [
+      { id: 'Q:0/1', title: 'Mock Song One', artist: 'Mock Artist', albumArtUrl: null, uri: 'x-mock:1' },
+      { id: 'Q:0/2', title: 'Mock Song Two', artist: 'Mock Artist', albumArtUrl: null, uri: 'x-mock:2' },
+      { id: 'Q:0/3', title: 'Mock Song Three', artist: 'Mock Artist', albumArtUrl: null, uri: 'x-mock:3' }
+    ];
+    return { items, total: items.length, start: 0, currentTrackNo: 2, playingFromQueue: true, coordinator: roomName };
+  }
+  const coordName = coordinatorNameFor(roomName);
+  const device = findDevice(coordName);
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  const { items, total } = await browseContainerPaged(coordName, 'Q:0', start, 200);
+  let currentTrackNo = 0;
+  let playingFromQueue = false;
+  try {
+    const pos = await device.avTransportService().GetPositionInfo();
+    currentTrackNo = parseInt(pos.Track, 10) || 0;
+  } catch (err) { /* stopped/unreachable -- fine */ }
+  try {
+    playingFromQueue = await isPlayingFromQueue(coordName);
+  } catch (err) { /* fine */ }
+  return { items, total, start, currentTrackNo, playingFromQueue, coordinator: coordName };
+}
+
+// The AddURIToQueue positioning semantics, hardware-verified elsewhere
+// in this file: EnqueueAsNext=1 with DesiredFirstTrackNumberEnqueued=0
+// appends to the end (that's what device.queue() does and what
+// playTracksAsQueue has always used); a non-zero Desired number inserts
+// AT that position. "Play next" = insert at current+1; "play now" =
+// same insert, then jump to the first inserted track -- the rest of the
+// queue survives, which is the whole point versus the replace-the-world
+// play paths.
+async function addTracksToQueue(roomName, tracks, mode) {
+  if (usingMock) return { queued: (tracks || []).length, mode };
+  const coordName = coordinatorNameFor(roomName);
+  const device = findDevice(coordName);
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  const list = (tracks || []).filter((t) => t && t.uri).slice(0, 500);
+  if (list.length === 0) return { queued: 0, mode };
+  return guarded(`addTracksToQueue(${roomName}, ${mode}, ${list.length})`, async () => {
+    let playingFromQueue = false;
+    let base = 0;
+    if (mode === 'next' || mode === 'now') {
+      try { playingFromQueue = await isPlayingFromQueue(coordName); } catch (err) { /* fine */ }
+      if (playingFromQueue) {
+        try {
+          base = parseInt((await device.avTransportService().GetPositionInfo()).Track, 10) || 0;
+        } catch (err) { /* fine */ }
+      }
+    }
+    let firstEnqueued = null;
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      const desired = (mode === 'end' || base === 0) ? 0 : base + 1 + i;
+      const res = await device.avTransportService().AddURIToQueue({
+        InstanceID: 0,
+        EnqueuedURI: Helpers.EncodeXml(t.uri),
+        EnqueuedURIMetaData: Helpers.EncodeXml(t.metadata || ''),
+        DesiredFirstTrackNumberEnqueued: desired,
+        EnqueueAsNext: 1
+      });
+      if (firstEnqueued === null) firstEnqueued = parseInt(res.FirstTrackNumberEnqueued, 10) || null;
+    }
+    if (mode === 'now' && firstEnqueued) {
+      if (!playingFromQueue) await device.selectQueue();
+      await device.selectTrack(firstEnqueued);
+      await device.play();
+    }
+    invalidateContainerCache('Q:0');
+    return { queued: list.length, mode, firstTrackNo: firstEnqueued };
+  });
+}
+
+// Whole album / container -> queue. Browses through the SAME pipeline
+// as everything else (so L: local containers work identically to SQ:
+// playlists and A: library albums), capped at 500 tracks per action.
+async function addContainerToQueue(roomName, containerId, mode) {
+  if (usingMock) return { queued: 3, mode };
+  const tracks = [];
+  let startIdx = 0;
+  for (;;) {
+    const { items, total } = await browseContainerPaged(roomName, containerId, startIdx, 200);
+    for (const it of items) {
+      if (it.uri) tracks.push({ uri: it.uri, metadata: it.metadata });
+    }
+    startIdx += 200;
+    if (startIdx >= total || items.length === 0 || tracks.length >= 500) break;
+  }
+  return addTracksToQueue(roomName, tracks, mode);
+}
+
+async function removeQueueTrack(roomName, trackNo) {
+  if (usingMock) return;
+  const device = findDevice(coordinatorNameFor(roomName));
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  await guarded(`removeQueueTrack(${roomName}, ${trackNo})`, async () => {
+    await device.removeTracksFromQueue(trackNo, 1);
+    invalidateContainerCache('Q:0');
+  });
+}
+
+async function moveQueueTrack(roomName, from, insertBefore) {
+  if (usingMock) return;
+  const device = findDevice(coordinatorNameFor(roomName));
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  await guarded(`moveQueueTrack(${roomName}, ${from} -> ${insertBefore})`, async () => {
+    await device.avTransportService().ReorderTracksInQueue({
+      InstanceID: 0,
+      StartingIndex: from,
+      NumberOfTracks: 1,
+      InsertBefore: insertBefore,
+      UpdateID: 0
+    });
+    invalidateContainerCache('Q:0');
+  });
+}
+
+async function clearQueue(roomName) {
+  if (usingMock) return;
+  const device = findDevice(coordinatorNameFor(roomName));
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  await guarded(`clearQueue(${roomName})`, async () => {
+    await device.flush();
+    invalidateContainerCache('Q:0');
+  });
+}
+
+async function jumpToQueueTrack(roomName, trackNo) {
+  if (usingMock) return;
+  const coordName = coordinatorNameFor(roomName);
+  const device = findDevice(coordName);
+  if (!device) throw new Error(`Room not found: ${roomName}`);
+  await guarded(`jumpToQueueTrack(${roomName}, ${trackNo})`, async () => {
+    let playingFromQueue = false;
+    try { playingFromQueue = await isPlayingFromQueue(coordName); } catch (err) { /* fine */ }
+    if (!playingFromQueue) await device.selectQueue();
+    await device.selectTrack(trackNo);
+    await device.play();
+  });
+}
+
 async function playTracksAsQueue(roomName, tracks) {
   if (usingMock) return;
   const device = findDevice(roomName);
@@ -2170,6 +2398,16 @@ module.exports = {
   addContainerToPlaylist,
   removeTrackFromPlaylist,
   saveQueueAsPlaylist,
+  getQueue,
+  addTracksToQueue,
+  addContainerToQueue,
+  removeQueueTrack,
+  moveQueueTrack,
+  clearQueue,
+  jumpToQueueTrack,
+  snapshotGroupVolume,
+  setQueueChangedCallback,
+  setLibraryChangedCallback,
   getCachedContainerItems,
   playItem,
   playPlaylistTrack,
