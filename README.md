@@ -197,9 +197,9 @@ step:
    and browse pages render faster because no filesystem lookups happen
    per row. Dropping a cover image into a folder later is picked up by
    the next scan and outranks the extracted one.
-4. **Queue management -- DONE (this release):** an "Up Next" panel
-   (queue button beside the fullscreen control) showing the focused
-   room's group queue with the current track highlighted -- tap a track
+4. **Queue management -- DONE (this release):** an "Up Next" view
+   (a QUEUE tab beside SOURCES in the source panel, v0.7.1) showing the
+   focused room's group queue with the current track highlighted -- tap a track
    to jump, per-row move up/down and remove, Clear, and Save-as-playlist.
    Every browse row (tracks AND albums, local or Sonos library) gains a
    vertical-ellipsis button opening **Play Now / Play Next / Add to

@@ -10,10 +10,17 @@
 // queue for a grouped member shows the group's real queue.
 
 const QueuePanel = (() => {
-  const panel = document.getElementById('queuePanel');
+  // v0.7.1: the queue lives INSIDE the source panel as a sibling tab
+  // (SOURCES | QUEUE) instead of a full-screen modal -- it no longer
+  // covers now-playing, it follows the focused room, and the corner
+  // buttons stay uncluttered. Switching tabs preserves whatever browse
+  // state the sources list was showing (it's hidden, not reset).
+  const sourcePanelEl = document.getElementById('sourcePanel');
+  const tabSources = document.getElementById('srcTabSources');
+  const tabQueue = document.getElementById('srcTabQueue');
+  const panel = document.getElementById('queueView');
   const titleEl = document.getElementById('queuePanelTitle');
   const itemsEl = document.getElementById('queuePanelItems');
-  const closeBtn = document.getElementById('queuePanelClose');
   const saveBtn = document.getElementById('queueSaveBtn');
   const clearBtn = document.getElementById('queueClearBtn');
   const actions = document.getElementById('queueActions');
@@ -42,7 +49,56 @@ const QueuePanel = (() => {
   }
 
   function isOpen() {
-    return panel && panel.style.display !== 'none';
+    return !!(sourcePanelEl && sourcePanelEl.classList.contains('sourcepanel--queue'));
+  }
+
+  function currentFocusedRoom() {
+    try {
+      return window.SonosView && window.SonosView.getFocusedRoom
+        ? window.SonosView.getFocusedRoom()
+        : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function activateQueueTab() {
+    sourcePanelEl.classList.add('sourcepanel--queue');
+    tabQueue.classList.add('is-active');
+    tabSources.classList.remove('is-active');
+    const r = currentFocusedRoom();
+    if (!r) {
+      room = null;
+      state = null;
+      if (titleEl) titleEl.textContent = 'UP NEXT';
+      itemsEl.innerHTML = '<li class="queuepanel__empty">Select a room to see its queue</li>';
+      return;
+    }
+    room = r;
+    itemsEl.innerHTML = '<li class="queuepanel__empty">Loading\u2026</li>';
+    refresh();
+  }
+
+  function activateSourcesTab() {
+    sourcePanelEl.classList.remove('sourcepanel--queue');
+    tabSources.classList.add('is-active');
+    tabQueue.classList.remove('is-active');
+  }
+
+  // Called by sonosView whenever room focus changes -- if the queue tab
+  // is showing, it follows the newly focused room/group.
+  function handleRoomFocused(newRoom) {
+    if (!isOpen()) return;
+    if (!newRoom) {
+      room = null;
+      state = null;
+      itemsEl.innerHTML = '<li class="queuepanel__empty">Select a room to see its queue</li>';
+      return;
+    }
+    if (newRoom === room) return;
+    room = newRoom;
+    itemsEl.innerHTML = '<li class="queuepanel__empty">Loading\u2026</li>';
+    refresh();
   }
 
   // ---------------- Up Next panel ----------------
@@ -151,18 +207,9 @@ const QueuePanel = (() => {
     render();
   }
 
-  function open(forRoom) {
-    if (!forRoom) return;
-    room = forRoom;
-    panel.style.display = 'flex';
-    itemsEl.innerHTML = '<li class="queuepanel__empty">Loading\u2026</li>';
-    refresh();
-  }
-
-  function close() {
-    panel.style.display = 'none';
-    state = null;
-  }
+  // Kept for compatibility with anything still calling open()/close().
+  function open() { activateQueueTab(); }
+  function close() { activateSourcesTab(); }
 
   // Debounced external refresh -- queue events can arrive in bursts
   // (one per track during an album add).
@@ -205,10 +252,8 @@ const QueuePanel = (() => {
 
   // ---------------- Wiring ----------------
 
-  if (closeBtn) closeBtn.addEventListener('click', close);
-  if (panel) {
-    panel.addEventListener('click', (e) => { if (e.target === panel) close(); });
-  }
+  if (tabQueue) tabQueue.addEventListener('click', activateQueueTab);
+  if (tabSources) tabSources.addEventListener('click', activateSourcesTab);
   if (clearBtn) {
     clearBtn.addEventListener('click', async () => {
       if (!window.confirm('Clear the whole queue?')) return;
@@ -235,12 +280,10 @@ const QueuePanel = (() => {
   }
   if (actionsCancel) actionsCancel.addEventListener('click', hideActions);
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    if (actions && actions.style.display !== 'none') hideActions();
-    else if (isOpen()) close();
+    if (e.key === 'Escape' && actions && actions.style.display !== 'none') hideActions();
   });
 
-  return { open, close, refreshIfOpen: scheduleRefresh, handleQueueChanged, handleNowPlayingChanged, showActions };
+  return { open, close, refreshIfOpen: scheduleRefresh, handleQueueChanged, handleNowPlayingChanged, handleRoomFocused, showActions };
 })();
 
 window.QueuePanel = QueuePanel;

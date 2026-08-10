@@ -1559,23 +1559,6 @@ button:focus-visible,
 }
 
 /* ---------------- Queue panel (v0.7.0) ---------------- */
-.nowplaying__queue-btn {
-  position: absolute;
-  top: 10px;
-  right: 52px;
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  color: inherit;
-  font-size: 16px;
-  cursor: pointer;
-  z-index: 3;
-}
-.nowplaying__queue-btn:active { background: rgba(255, 255, 255, 0.2); }
-
-.queuepanel,
 .queueactions {
   position: fixed;
   inset: 0;
@@ -1585,43 +1568,54 @@ button:focus-visible,
   justify-content: center;
   z-index: 60;
 }
-.queuepanel__sheet {
-  width: min(560px, 94vw);
-  max-height: 86vh;
+/* Tabs at the top of the source panel: SOURCES | QUEUE */
+.sourcepanel__tabs {
   display: flex;
-  flex-direction: column;
-  background: #101014;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 14px;
-  overflow: hidden;
-  color: #fff;
+  gap: 6px;
+  padding: 10px 12px 4px;
+  flex: 0 0 auto;
 }
-.queuepanel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-.queuepanel__title {
-  margin: 0;
-  font-size: 13px;
+.sourcepanel__tab {
+  flex: 1;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  padding: 7px 0;
+  font-size: 12px;
   letter-spacing: 0.08em;
-  opacity: 0.85;
+  cursor: pointer;
+  opacity: 0.65;
+}
+.sourcepanel__tab.is-active {
+  background: rgba(255, 255, 255, 0.12);
+  opacity: 1;
+}
+
+/* Queue tab active: hide the sources chrome, show the queue view */
+.sourcepanel--queue .sourcepanel__header,
+.sourcepanel--queue .sourcepanel__search,
+.sourcepanel--queue .sourcepanel__items { display: none !important; }
+.queueview {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.sourcepanel--queue .queueview { display: flex; }
+.queueview__info {
+  margin: 0;
+  padding: 8px 14px 0;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  opacity: 0.7;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.queuepanel__close {
-  border: none;
-  background: rgba(255, 255, 255, 0.08);
-  color: inherit;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  cursor: pointer;
-  flex: 0 0 auto;
-  margin-left: 10px;
+.queueview .queuepanel__items {
+  flex: 1;
+  overflow-y: auto;
 }
 .queuepanel__actions {
   display: flex;

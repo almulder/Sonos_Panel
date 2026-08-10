@@ -49,7 +49,6 @@
 
             <div class="nowplaying" id="sonosNowPlaying">
               <button class="nowplaying__fullscreen-btn" id="sonosFullscreenBtn" aria-label="Full screen">&#x2922;</button>
-              <button class="nowplaying__queue-btn" id="sonosQueueBtn" aria-label="Up next" title="Up next">&#9776;</button>
               <div class="sleeptimer" id="sonosSleepTimerWrap">
                 <button class="sleeptimer__btn" id="sonosSleepTimerBtn" aria-label="Sleep timer">
                   <img src="icons/sleep-timer.png" alt="" class="sleeptimer__icon" />
@@ -103,6 +102,10 @@
 
 
             <div class="sourcepanel" id="sourcePanel">
+              <div class="sourcepanel__tabs">
+                <button class="sourcepanel__tab is-active" id="srcTabSources">SOURCES</button>
+                <button class="sourcepanel__tab" id="srcTabQueue">QUEUE</button>
+              </div>
               <div class="sourcepanel__header">
                 <button class="sourcepanel__back" id="sourceBackBtn" aria-label="Back">&#8592;</button>
                 <p class="sourcepanel__title" id="sourcePanelTitle">SELECT A MUSIC SOURCE</p>
@@ -112,6 +115,14 @@
                 <button class="sourcepanel__searchclear" id="sourceSearchClear" aria-label="Clear search">&#10005;</button>
               </div>
               <ul class="sourcepanel__items" id="sourcePanelItems"></ul>
+              <div class="queueview" id="queueView">
+                <p class="queueview__info" id="queuePanelTitle">UP NEXT</p>
+                <div class="queuepanel__actions">
+                  <button class="queuepanel__actionbtn" id="queueSaveBtn">Save as playlist</button>
+                  <button class="queuepanel__actionbtn queuepanel__actionbtn--danger" id="queueClearBtn">Clear queue</button>
+                </div>
+                <ul class="queuepanel__items" id="queuePanelItems"></ul>
+              </div>
             </div>
           </div>
         </section>
@@ -129,20 +140,6 @@
 
     </div>
 
-  </div>
-
-  <div class="queuepanel" id="queuePanel" style="display: none;">
-    <div class="queuepanel__sheet">
-      <div class="queuepanel__header">
-        <p class="queuepanel__title" id="queuePanelTitle">UP NEXT</p>
-        <button class="queuepanel__close" id="queuePanelClose" aria-label="Close">&#10005;</button>
-      </div>
-      <div class="queuepanel__actions">
-        <button class="queuepanel__actionbtn" id="queueSaveBtn">Save as playlist</button>
-        <button class="queuepanel__actionbtn queuepanel__actionbtn--danger" id="queueClearBtn">Clear queue</button>
-      </div>
-      <ul class="queuepanel__items" id="queuePanelItems"></ul>
-    </div>
   </div>
 
   <div class="queueactions" id="queueActions" style="display: none;">

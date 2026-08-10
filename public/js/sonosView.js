@@ -152,12 +152,6 @@ const SonosView = (() => {
   const playPauseBtn = document.getElementById('sonosPlayPause');
   const prevBtn = document.getElementById('sonosPrev');
   const nextBtn = document.getElementById('sonosNext');
-  const queueBtn = document.getElementById('sonosQueueBtn');
-  if (queueBtn) {
-    queueBtn.addEventListener('click', () => {
-      if (focusedRoom && window.QueuePanel) window.QueuePanel.open(focusedRoom);
-    });
-  }
   const shuffleBtn = document.getElementById('sonosShuffleBtn');
   const crossfadeBtn = document.getElementById('sonosCrossfadeBtn');
   const sleepTimerBtn = document.getElementById('sonosSleepTimerBtn');
@@ -506,6 +500,9 @@ const SonosView = (() => {
 
   async function selectFocusedRoom(roomName) {
     focusedRoom = roomName;
+    if (window.QueuePanel && window.QueuePanel.handleRoomFocused) {
+      window.QueuePanel.handleRoomFocused(roomName);
+    }
     await refreshNowPlaying();
     render();
     await syncVolumeRailToFocusedRoom();
