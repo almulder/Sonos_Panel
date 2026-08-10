@@ -514,6 +514,11 @@ const SonosView = (() => {
     if (!focusedRoom && rooms.length > 0) {
       const topLevel = getTopLevelRooms();
       focusedRoom = topLevel.length > 0 ? topLevel[0].name : rooms[0].name;
+      // Seed the queue tab's room knowledge at boot too -- the default
+      // focus here doesn't go through selectFocusedRoom().
+      if (window.QueuePanel && window.QueuePanel.handleRoomFocused) {
+        window.QueuePanel.handleRoomFocused(focusedRoom);
+      }
     }
     render();
   }

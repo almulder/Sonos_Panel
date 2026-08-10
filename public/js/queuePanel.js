@@ -28,6 +28,7 @@ const QueuePanel = (() => {
   const actionsCancel = document.getElementById('queueActionsCancel');
 
   let room = null;          // room the panel was opened for
+  let lastKnownRoom = null; // last focus sonosView pushed to us (survives tab switches)
   let state = null;         // last /queue response
   let actionsPayload = null; // pending Play Now/Next/Add payload
   let refreshTimer = null;
@@ -53,13 +54,24 @@ const QueuePanel = (() => {
   }
 
   function currentFocusedRoom() {
+    // SonosView is a top-level `const` in a classic script -- a LEXICAL
+    // global, not a window property. window.SonosView is therefore
+    // always undefined (the v0.7.1 bug: every tab activation concluded
+    // "no room focused"). Bare-identifier access reaches the lexical
+    // global; try/catch guards the pre-load window, and lastKnownRoom
+    // (pushed by sonosView on every focus change, including the boot
+    // default) is the fallback of last resort.
+    let r = null;
     try {
-      return window.SonosView && window.SonosView.getFocusedRoom
-        ? window.SonosView.getFocusedRoom()
-        : null;
-    } catch (err) {
-      return null;
-    }
+      // eslint-disable-next-line no-undef
+      if (typeof SonosView !== 'undefined' && SonosView && SonosView.getFocusedRoom) {
+        r = SonosView.getFocusedRoom();
+      } else if (window.SonosView && window.SonosView.getFocusedRoom) {
+        r = window.SonosView.getFocusedRoom();
+      }
+    } catch (err) { /* fall through to lastKnownRoom */ }
+    if (typeof r === 'string' && r) return r;
+    return lastKnownRoom;
   }
 
   function activateQueueTab() {
@@ -88,6 +100,7 @@ const QueuePanel = (() => {
   // Called by sonosView whenever room focus changes -- if the queue tab
   // is showing, it follows the newly focused room/group.
   function handleRoomFocused(newRoom) {
+    if (newRoom) lastKnownRoom = newRoom; // record even when the tab is hidden
     if (!isOpen()) return;
     if (!newRoom) {
       room = null;
