@@ -1205,7 +1205,9 @@ async function getNowPlaying(roomName) {
     if (!shuffleAvailable) {
       try {
         shuffleAvailable = await isPlayingFromQueue(coordinatorNameFor(roomName));
-      } catch (err) { /* leave unavailable */ }
+      } catch (err) {
+        debugLog.warn('sonos', `getNowPlaying(${roomName}): queue-mode check failed: ${err.message}`);
+      }
     }
 
     return {
@@ -1912,6 +1914,22 @@ function attachContentDirectoryListener() {
   debugLog.info('sonos', 'Live library events attached (favorites/playlists/queue refresh on change)');
 }
 
+// True when the room's (coordinator's) transport is bound to its queue
+// (AVTransportURI = x-rincon-queue:RINCON_xxx#0) rather than a direct
+// stream/track URI. GetMediaInfo is the authoritative source -- the
+// same field the Phase 1 debug-transport endpoint verified on real
+// hardware. NOTE: v0.7.0-0.7.3 CALLED this function without it ever
+// being defined (the name originated as narrative shorthand in a code
+// audit); the ReferenceError was swallowed by catch blocks intended
+// for network errors, which silently broke Play Next positioning and
+// shuffle availability. Hence the warn-logging in every caller now.
+async function isPlayingFromQueue(roomName) {
+  const device = findDevice(coordinatorNameFor(roomName));
+  if (!device) return false;
+  const info = await device.avTransportService().GetMediaInfo();
+  return typeof info.CurrentURI === 'string' && info.CurrentURI.startsWith('x-rincon-queue:');
+}
+
 async function getQueue(roomName, start = 0) {
   if (usingMock) {
     const items = [
@@ -1933,7 +1951,9 @@ async function getQueue(roomName, start = 0) {
   } catch (err) { /* stopped/unreachable -- fine */ }
   try {
     playingFromQueue = await isPlayingFromQueue(coordName);
-  } catch (err) { /* fine */ }
+  } catch (err) {
+    debugLog.warn('sonos', `getQueue(${roomName}): queue-mode check failed: ${err.message}`);
+  }
   let playMode = 'NORMAL';
   try {
     playMode = (await device.avTransportService().GetTransportSettings()).PlayMode || 'NORMAL';
@@ -1964,7 +1984,11 @@ async function addTracksToQueue(roomName, tracks, mode) {
     let playingFromQueue = false;
     let base = 0;
     if (mode === 'next' || mode === 'now') {
-      try { playingFromQueue = await isPlayingFromQueue(coordName); } catch (err) { /* fine */ }
+      try {
+        playingFromQueue = await isPlayingFromQueue(coordName);
+      } catch (err) {
+        debugLog.warn('sonos', `addTracksToQueue(${roomName}): queue-mode check failed: ${err.message}`);
+      }
       if (playingFromQueue) {
         try {
           base = parseInt((await device.avTransportService().GetPositionInfo()).Track, 10) || 0;
@@ -2055,7 +2079,11 @@ async function jumpToQueueTrack(roomName, trackNo) {
   if (!device) throw new Error(`Room not found: ${roomName}`);
   await guarded(`jumpToQueueTrack(${roomName}, ${trackNo})`, async () => {
     let playingFromQueue = false;
-    try { playingFromQueue = await isPlayingFromQueue(coordName); } catch (err) { /* fine */ }
+    try {
+      playingFromQueue = await isPlayingFromQueue(coordName);
+    } catch (err) {
+      debugLog.warn('sonos', `jumpToQueueTrack(${roomName}): queue-mode check failed: ${err.message}`);
+    }
     if (!playingFromQueue) await device.selectQueue();
     await device.selectTrack(trackNo);
     await device.play();
