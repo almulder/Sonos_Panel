@@ -1193,6 +1193,21 @@ async function getNowPlaying(roomName) {
       if (!sourceLine) sourceLine = 'Local Library';
     }
 
+    // Positive queue confirmation for playback the panel didn't start
+    // itself (Play Now / queue-panel jumps / the phone app): neither
+    // context is set and track.uri is the media file's URL, but the
+    // coordinator's AVTransport URI says definitively whether a queue
+    // is playing -- and a queue can always be shuffled. Costs one
+    // GetMediaInfo, and only on the paths where the cheap checks
+    // already failed, so streams/radio still end up (correctly)
+    // unavailable.
+    let shuffleAvailable = isShuffleAvailable(track.uri, roomName);
+    if (!shuffleAvailable) {
+      try {
+        shuffleAvailable = await isPlayingFromQueue(coordinatorNameFor(roomName));
+      } catch (err) { /* leave unavailable */ }
+    }
+
     return {
       title: track.title || '',
       artist: lineInDeviceName || track.artist || '',
@@ -1204,7 +1219,7 @@ async function getNowPlaying(roomName) {
       duration: track.duration || 0,
       playMode,
       shuffleOn,
-      shuffleAvailable: isShuffleAvailable(track.uri, roomName),
+      shuffleAvailable,
       crossfadeOn,
       sleepTimerRemainingSeconds,
       sourceLine
@@ -1904,7 +1919,7 @@ async function getQueue(roomName, start = 0) {
       { id: 'Q:0/2', title: 'Mock Song Two', artist: 'Mock Artist', albumArtUrl: null, uri: 'x-mock:2' },
       { id: 'Q:0/3', title: 'Mock Song Three', artist: 'Mock Artist', albumArtUrl: null, uri: 'x-mock:3' }
     ];
-    return { items, total: items.length, start: 0, currentTrackNo: 2, playingFromQueue: true, coordinator: roomName };
+    return { items, total: items.length, start: 0, currentTrackNo: 2, playingFromQueue: true, shuffleOn: false, coordinator: roomName };
   }
   const coordName = coordinatorNameFor(roomName);
   const device = findDevice(coordName);
@@ -1919,7 +1934,15 @@ async function getQueue(roomName, start = 0) {
   try {
     playingFromQueue = await isPlayingFromQueue(coordName);
   } catch (err) { /* fine */ }
-  return { items, total, start, currentTrackNo, playingFromQueue, coordinator: coordName };
+  let playMode = 'NORMAL';
+  try {
+    playMode = (await device.avTransportService().GetTransportSettings()).PlayMode || 'NORMAL';
+  } catch (err) { /* stopped/unreachable -- fine */ }
+  return {
+    items, total, start, currentTrackNo, playingFromQueue,
+    shuffleOn: String(playMode).startsWith('SHUFFLE'),
+    coordinator: coordName
+  };
 }
 
 // The AddURIToQueue positioning semantics, hardware-verified elsewhere

@@ -215,7 +215,11 @@ const QueuePanel = (() => {
       const where = state && state.coordinator && state.coordinator !== room
         ? `${room.toUpperCase()} (GROUP: ${state.coordinator.toUpperCase()})`
         : String(room).toUpperCase();
-      titleEl.textContent = `UP NEXT \u2014 ${where}`;
+      // Shuffle is a play MODE on Sonos, not a reorder -- the list
+      // below stays in queue order while playback traverses randomly.
+      // Label it so out-of-order playback never looks like a bug.
+      const shuffleTag = state && state.shuffleOn ? ' \u00b7 SHUFFLE ON' : '';
+      titleEl.textContent = `UP NEXT \u2014 ${where}${shuffleTag}`;
     }
     render();
   }
