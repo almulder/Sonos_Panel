@@ -97,6 +97,14 @@ const ART_BASENAMES = ['cover', 'folder', 'front', 'album', 'albumart', 'albumar
 // art files change about never, and a container restart clears it.
 const folderArtCache = new Map();
 
+// The scanner clears this at the start of every scan so long-running
+// processes notice cover files added or removed between scans --
+// without this, a negative result cached at boot would hide a
+// cover.jpg dropped in weeks later.
+function clearFolderArtCache() {
+  folderArtCache.clear();
+}
+
 function findFolderArt(relDir) {
   const key = relDir || '';
   if (folderArtCache.has(key)) return folderArtCache.get(key);
@@ -194,6 +202,14 @@ function buildStreamUri(relPath) {
     .map((seg) => encodeURIComponent(seg))
     .join('/');
   return `${base}/stream/${encoded}`;
+}
+
+// Extracted embedded covers (cached under appdata by the scanner) get
+// their own URL namespace, served by the /art/embedded/ route.
+function buildEmbeddedArtUri(cacheFile) {
+  const base = getPublicBaseUrl();
+  if (!base) return null;
+  return `${base}/art/embedded/${encodeURIComponent(cacheFile)}`;
 }
 
 function buildArtUri(relPath) {
@@ -375,7 +391,9 @@ module.exports = {
   isImageFile,
   imageContentTypeFor,
   findFolderArt,
+  clearFolderArtCache,
   buildArtUri,
+  buildEmbeddedArtUri,
   getTrackDurationSeconds,
   buildTrackDidl,
   resolveSafe,

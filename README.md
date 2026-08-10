@@ -42,13 +42,21 @@ switch this to bridge networking.
 
 ## Running on Unraid
 
-1. **Docker tab → Add Container**, or use `unraid-template.xml` from
-   this repo directly (Docker tab → Add Container → Template →
-   select it, or place the file in
-   `/boot/config/plugins/dockerMan/templates-user/`)
-2. Confirm **Network Type is set to Host** -- same SSDP requirement as
-   above, this is not optional
-3. Apply, then open `http://<unraid-ip>:3000`
+Full walkthrough in [`UNRAID_SETUP.md`](UNRAID_SETUP.md). The short
+version:
+
+1. **Docker tab → Add Container**, using `my-Sonos_Panel.xml` from this
+   repo (place it in
+   `/boot/config/plugins/dockerMan/templates-user/`, or paste its
+   fields manually)
+2. **Network Type: Custom (br0)** with a **fixed IP** on the same
+   subnet as your speakers. The panel needs its own LAN address both
+   for SSDP discovery/eventing and so speakers can stream Local Music
+   Library audio back from it. (Host networking also works but shares
+   the Unraid IP; bridge mode does not work.)
+3. Optionally set **Music Path** (Local Music Library) and the other
+   template fields, Apply, then open `http://<the-ip-you-chose>/` --
+   the template serves the panel on port 80, no port number needed
 
 ## Installing as an app (Android/iOS)
 
@@ -170,7 +178,7 @@ step:
    content-types, folder album art (`cover.jpg` etc.), real track
    durations, and queue-based playback with full transport control.
 2. **Indexing -- DONE:** the background scanner described below.
-3. **Browsing -- DONE (this release):** a "Local Library" source,
+3. **Browsing -- DONE:** a "Local Library" source,
    pinned to the top of the Sources list, with Artists / Albums /
    Songs / Composers / Genres / Folders -- presented through the exact
    same browser as the Sonos Music Library. Big indexes split into A-Z
@@ -181,12 +189,21 @@ step:
    album and jumps to that track (same behavior as the Sonos library),
    now-playing shows "Local Library - <album>", and Folders shows only
    indexed, Sonos-playable files -- never something that would error
-   when tapped. Album artwork comes from folder images (`cover.jpg`
-   etc.); extracting art embedded in the files themselves is still to
-   come.
-4. **Local playlists:** create/edit playlists of local tracks, mirroring
-   the existing Sonos Playlists UI, with none of Sonos's playlist size
-   limits.
+   when tapped. **Artwork is fully resolved at scan time (v0.6.0):**
+   a folder image (`cover.jpg` etc.) wins; otherwise the cover embedded
+   in the files is extracted once per album folder into
+   `<appdata>/artcache` and served from there -- so albums with only
+   embedded art get covers everywhere (browse, playlists, playback),
+   and browse pages render faster because no filesystem lookups happen
+   per row. Dropping a cover image into a folder later is picked up by
+   the next scan and outranks the extracted one.
+4. **Queue management (planned next):** an "Up Next" view, Play Now /
+   Play Next / Add to Queue on local tracks and albums, remove/reorder,
+   plus live refresh of favorites/playlists/queue via ContentDirectory
+   events. (A separate panel-native playlist system was originally
+   planned here, but Sonos playlists now store local tracks with full
+   metadata -- so it's only worth building if Sonos-side limits ever
+   bite.)
 5. **Transcoding (planned), two flavors:** a transparent
    transcode-on-play path with an on-disk cache, so hi-res files play
    on Sonos without ever modifying the originals -- and a separate

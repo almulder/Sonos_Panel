@@ -69,15 +69,21 @@ function likePattern(term) {
 // Item builders -- all output matches the shape mapDidlNode gives the
 // client: {id, title, albumArtUrl, browsable, uri, artist?, metadata?}
 // ---------------------------------------------------------------------
-function folderArtUrlFor(relPath) {
-  const dir = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
-  const artRel = localLibrary.findFolderArt(dir);
-  return artRel ? localLibrary.buildArtUri(artRel) : null;
+// Art references come pre-resolved from the scanner (tracks.art):
+// 'f:<image relpath>' -> folder image via /art/, 'e:<cachefile>' ->
+// extracted embedded cover via /art/embedded/. No filesystem work at
+// browse time -- which is also why big letter-bucket pages render
+// faster than the v0.5.x folder-lookup-per-row approach.
+function artUrl(art) {
+  if (!art) return null;
+  if (art.startsWith('f:')) return localLibrary.buildArtUri(art.slice(2));
+  if (art.startsWith('e:')) return localLibrary.buildEmbeddedArtUri(art.slice(2));
+  return null;
 }
 
 function trackItem(row) {
   const uri = localLibrary.buildStreamUri(row.path);
-  const albumArtUrl = folderArtUrlFor(row.path);
+  const albumArtUrl = artUrl(row.art);
   return {
     id: `L:TRACK${SEP}${row.path}`,
     title: row.title || row.path,
@@ -98,13 +104,15 @@ function trackItem(row) {
   };
 }
 
-function albumItem(artist, album, samplePath) {
+function albumItem(artist, album, art) {
   return {
     id: `L:ALBUM${SEP}${artist}${SEP}${album}`,
     title: album,
     artist: artist || null,
     browsable: true,
-    albumArtUrl: samplePath ? folderArtUrlFor(samplePath) : null
+    // MAX(art) in the callers: string ordering makes 'f:' beat 'e:'
+    // beat '', so folder images win when any track has one.
+    albumArtUrl: artUrl(art)
   };
 }
 
@@ -174,7 +182,7 @@ function getCategories() {
 function listArtists(where, params, start, limit) {
   return pagedQuery(
     `SELECT COUNT(DISTINCT COALESCE(album_artist, '')) AS c FROM tracks ${where}`,
-    `SELECT COALESCE(album_artist, '') AS artist, MIN(path) AS sample
+    `SELECT COALESCE(album_artist, '') AS artist, MAX(art) AS art
      FROM tracks ${where} GROUP BY COALESCE(album_artist, '')
      ORDER BY artist COLLATE NOCASE LIMIT ? OFFSET ?`,
     params, start, limit,
@@ -182,7 +190,7 @@ function listArtists(where, params, start, limit) {
       id: `L:ARTIST${SEP}${r.artist}`,
       title: r.artist || 'Unknown Artist',
       browsable: true,
-      albumArtUrl: r.sample ? folderArtUrlFor(r.sample) : null
+      albumArtUrl: artUrl(r.art)
     })
   );
 }
@@ -190,18 +198,18 @@ function listArtists(where, params, start, limit) {
 function listAlbums(where, params, start, limit) {
   return pagedQuery(
     `SELECT COUNT(*) AS c FROM (SELECT 1 FROM tracks ${where} GROUP BY COALESCE(album_artist, ''), COALESCE(album, ''))`,
-    `SELECT COALESCE(album_artist, '') AS artist, COALESCE(album, '') AS album, MIN(path) AS sample
+    `SELECT COALESCE(album_artist, '') AS artist, COALESCE(album, '') AS album, MAX(art) AS art
      FROM tracks ${where} GROUP BY COALESCE(album_artist, ''), COALESCE(album, '')
      ORDER BY album COLLATE NOCASE, artist COLLATE NOCASE LIMIT ? OFFSET ?`,
     params, start, limit,
-    (r) => albumItem(r.artist, r.album || 'Unknown Album', r.sample)
+    (r) => albumItem(r.artist, r.album || 'Unknown Album', r.art)
   );
 }
 
 function listTracks(where, params, orderBy, start, limit) {
   return pagedQuery(
     `SELECT COUNT(*) AS c FROM tracks ${where}`,
-    `SELECT path, title, artist, album, duration_s, mime FROM tracks ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
+    `SELECT path, title, artist, album, duration_s, mime, art FROM tracks ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
     params, start, limit, trackItem
   );
 }
@@ -209,11 +217,11 @@ function listTracks(where, params, orderBy, start, limit) {
 function artistAlbums(artist, start, limit) {
   return pagedQuery(
     `SELECT COUNT(*) AS c FROM (SELECT 1 FROM tracks WHERE COALESCE(album_artist, '') = ? GROUP BY COALESCE(album, ''))`,
-    `SELECT COALESCE(album, '') AS album, MIN(path) AS sample, MIN(year) AS year
+    `SELECT COALESCE(album, '') AS album, MAX(art) AS art, MIN(year) AS year
      FROM tracks WHERE COALESCE(album_artist, '') = ? GROUP BY COALESCE(album, '')
      ORDER BY year IS NULL, year, album COLLATE NOCASE LIMIT ? OFFSET ?`,
     [artist], start, limit,
-    (r) => albumItem(artist, r.album || 'Unknown Album', r.sample)
+    (r) => albumItem(artist, r.album || 'Unknown Album', r.art)
   );
 }
 
@@ -238,11 +246,11 @@ function listGenres(where, params, start, limit) {
 function genreAlbums(genre, start, limit) {
   return pagedQuery(
     `SELECT COUNT(*) AS c FROM (SELECT 1 FROM tracks WHERE genre = ? GROUP BY COALESCE(album_artist, ''), COALESCE(album, ''))`,
-    `SELECT COALESCE(album_artist, '') AS artist, COALESCE(album, '') AS album, MIN(path) AS sample
+    `SELECT COALESCE(album_artist, '') AS artist, COALESCE(album, '') AS album, MAX(art) AS art
      FROM tracks WHERE genre = ? GROUP BY COALESCE(album_artist, ''), COALESCE(album, '')
      ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE LIMIT ? OFFSET ?`,
     [genre], start, limit,
-    (r) => albumItem(r.artist, r.album || 'Unknown Album', r.sample)
+    (r) => albumItem(r.artist, r.album || 'Unknown Album', r.art)
   );
 }
 
@@ -261,7 +269,7 @@ function listComposers(where, params, start, limit) {
 // scan, then one pass to split out immediate children.
 function folderChildren(relDir, start, limit) {
   const prefix = relDir ? `${relDir}/` : '';
-  const st = prep("SELECT path, title, artist, album, duration_s, mime FROM tracks WHERE path >= ? AND path < ? ORDER BY path");
+  const st = prep("SELECT path, title, artist, album, duration_s, mime, art FROM tracks WHERE path >= ? AND path < ? ORDER BY path");
   const dirs = new Map(); // name -> child rel
   const files = [];
   for (const row of st.iterate(prefix, `${prefix}\uffff`)) {
@@ -409,7 +417,7 @@ async function browsePage(containerId, start = 0, limit = PAGE_LIMIT) {
       case 'TRACK': {
         // A single track "container" -- returned as a one-item list so
         // anything that browses an item id still gets something sane.
-        const row = prep('SELECT path, title, artist, album, duration_s, mime FROM tracks WHERE path = ?').get(args[0]);
+        const row = prep('SELECT path, title, artist, album, duration_s, mime, art FROM tracks WHERE path = ?').get(args[0]);
         return page(row ? [trackItem(row)] : [], row ? 1 : 0, safeStart);
       }
       default:

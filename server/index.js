@@ -563,6 +563,24 @@ app.get('/stream/*', (req, res) => {
   });
 });
 
+// Extracted embedded covers, cached by the scanner under appdata.
+// Filenames are strictly <sha1>.<ext>, validated here, so there is no
+// path to traverse. Effectively immutable (the hash is the album
+// folder), hence the long cache lifetime.
+app.get('/art/embedded/:file', (req, res) => {
+  const file = req.params.file;
+  if (!/^[a-f0-9]{40}\.(jpg|jpeg|png|gif|webp)$/.test(file)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const abs = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'artcache', file);
+  res.sendFile(abs, {
+    dotfiles: 'deny',
+    headers: { 'Cache-Control': 'public, max-age=604800' }
+  }, (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
+});
+
 // Album art endpoint -- same path rules as /stream/ but images only,
 // so the two routes can't be used to reach each other's file types.
 // Art is fetched by the speakers/app repeatedly, hence the cache header.

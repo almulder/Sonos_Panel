@@ -40,6 +40,7 @@
 //             testing ("can't play due to the sample rate" on a hi-res
 //             FLAC), so it's enforced here.
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const debugLog = require('./debugLog');
@@ -48,6 +49,12 @@ const localLibrary = require('./localLibrary');
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const RESCAN_SCHEDULE_RAW = (process.env.RESCAN_SCHEDULE || '').trim();
 const DB_FILENAME = 'library.db';
+// Extracted embedded covers live here (inside appdata, so they survive
+// container updates) -- one image per album DIRECTORY, named by a hash
+// of the directory path. Directory granularity because covers are an
+// album property: extracting per-track would mean ~160k near-identical
+// images for zero gain.
+const ART_CACHE_DIRNAME = 'artcache';
 const INCOMPATIBLE_FILENAME = 'incompatible-files.txt';
 
 // Commit cadence. 500 keeps transactions chunky enough to be fast over
@@ -262,7 +269,8 @@ function init(options) {
         title TEXT, artist TEXT, album_artist TEXT, album TEXT,
         composer TEXT, genre TEXT,
         track_no INTEGER, disc_no INTEGER, year INTEGER,
-        duration_s INTEGER, mime TEXT, embedded_art INTEGER DEFAULT 0
+        duration_s INTEGER, mime TEXT, embedded_art INTEGER DEFAULT 0,
+        art TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
       CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
@@ -288,21 +296,32 @@ function init(options) {
     const incompatCols = db.prepare('PRAGMA table_info(incompatible)').all().map((c) => c.name);
     if (!incompatCols.includes('mtime_ms')) db.exec('ALTER TABLE incompatible ADD COLUMN mtime_ms INTEGER');
     if (!incompatCols.includes('size')) db.exec('ALTER TABLE incompatible ADD COLUMN size INTEGER');
+    // v0.6.0: resolved artwork reference per track. 'f:<image relpath>'
+    // = folder image, 'e:<cachefile>' = extracted embedded cover,
+    // '' = checked and none, NULL = not yet resolved (triggers the art
+    // pass below). Existing rows get NULL from the ALTER and are
+    // backfilled WITHOUT re-parsing audio -- see resolveArtPass().
+    const trackCols = db.prepare('PRAGMA table_info(tracks)').all().map((c) => c.name);
+    if (!trackCols.includes('art')) db.exec('ALTER TABLE tracks ADD COLUMN art TEXT');
+    fs.mkdirSync(path.join(DATA_DIR, ART_CACHE_DIRNAME), { recursive: true });
     stmts = {
       getTrack: db.prepare('SELECT mtime_ms, size FROM tracks WHERE path = ?'),
       touchTrack: db.prepare('UPDATE tracks SET generation = ? WHERE path = ?'),
       upsertTrack: db.prepare(`
         INSERT INTO tracks (path, mtime_ms, size, generation, title, artist, album_artist, album,
-                            composer, genre, track_no, disc_no, year, duration_s, mime, embedded_art)
+                            composer, genre, track_no, disc_no, year, duration_s, mime, embedded_art, art)
         VALUES (@path, @mtime_ms, @size, @generation, @title, @artist, @album_artist, @album,
-                @composer, @genre, @track_no, @disc_no, @year, @duration_s, @mime, @embedded_art)
+                @composer, @genre, @track_no, @disc_no, @year, @duration_s, @mime, @embedded_art, @art)
         ON CONFLICT(path) DO UPDATE SET
           mtime_ms=excluded.mtime_ms, size=excluded.size, generation=excluded.generation,
           title=excluded.title, artist=excluded.artist, album_artist=excluded.album_artist,
           album=excluded.album, composer=excluded.composer, genre=excluded.genre,
           track_no=excluded.track_no, disc_no=excluded.disc_no, year=excluded.year,
-          duration_s=excluded.duration_s, mime=excluded.mime, embedded_art=excluded.embedded_art
+          duration_s=excluded.duration_s, mime=excluded.mime, embedded_art=excluded.embedded_art,
+          art=excluded.art
       `),
+      unresolvedArt: db.prepare("SELECT path, art, embedded_art FROM tracks WHERE art IS NULL OR art = '' OR art LIKE 'e:%'"),
+      setArt: db.prepare('UPDATE tracks SET art = ? WHERE path = ?'),
       getIncompatibleRow: db.prepare('SELECT mtime_ms, size FROM incompatible WHERE path = ?'),
       touchIncompatible: db.prepare('UPDATE incompatible SET generation = ? WHERE path = ?'),
       upsertIncompatible: db.prepare(`
@@ -412,6 +431,62 @@ function commitBatch(generation, force) {
   emitProgress({});
 }
 
+// ---------------------------------------------------------------------
+// Artwork resolution. Priority: folder image (cover.jpg etc., shared by
+// the whole directory) -> embedded cover extracted once per directory
+// into DATA_DIR/artcache -> '' meaning "checked, none". The reference
+// string stored in tracks.art is what the browse layer turns into a
+// URL with zero filesystem work at browse time.
+// ---------------------------------------------------------------------
+const ART_EXTS = ['jpg', 'png', 'gif', 'webp'];
+
+function artCacheNameFor(dirRel) {
+  return crypto.createHash('sha1').update(dirRel).digest('hex');
+}
+
+function extFromPictureFormat(format) {
+  const f = String(format || '').toLowerCase();
+  if (f.includes('png')) return 'png';
+  if (f.includes('gif')) return 'gif';
+  if (f.includes('webp')) return 'webp';
+  return 'jpg';
+}
+
+// Returns the cache filename for this directory's embedded cover,
+// writing it from `picture` if not already cached. Null on failure.
+function ensureEmbeddedArtCached(dirRel, picture) {
+  const hash = artCacheNameFor(dirRel);
+  const cacheDir = path.join(DATA_DIR, ART_CACHE_DIRNAME);
+  for (const ext of ART_EXTS) {
+    if (fs.existsSync(path.join(cacheDir, `${hash}.${ext}`))) return `${hash}.${ext}`;
+  }
+  if (!picture || !picture.data || picture.data.length === 0) return null;
+  const file = `${hash}.${extFromPictureFormat(picture.format)}`;
+  try {
+    fs.writeFileSync(path.join(cacheDir, file), Buffer.from(picture.data));
+    return file;
+  } catch (err) {
+    debugLog.warn('scanner', `could not cache embedded art for "${dirRel}": ${err.message}`);
+    return null;
+  }
+}
+
+function dirOf(rel) {
+  return rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+}
+
+function resolveArtInline(rel, common) {
+  const dir = dirOf(rel);
+  const folderArt = localLibrary.findFolderArt(dir);
+  if (folderArt) return `f:${folderArt}`;
+  const pics = (common && common.picture) || [];
+  if (pics.length > 0) {
+    const cached = ensureEmbeddedArtCached(dir, pics[0]);
+    if (cached) return `e:${cached}`;
+  }
+  return '';
+}
+
 function firstOrJoin(value) {
   if (Array.isArray(value)) return value.filter(Boolean).join('; ') || null;
   return value || null;
@@ -480,9 +555,80 @@ async function processFile(rel, generation, mm) {
       year: common.year || null,
       duration_s: Math.round((format.duration) || 0),
       mime: localLibrary.contentTypeFor(rel),
-      embedded_art: common.picture && common.picture.length > 0 ? 1 : 0
+      embedded_art: common.picture && common.picture.length > 0 ? 1 : 0,
+      art: resolveArtInline(rel, common)
     }
   });
+}
+
+// ---------------------------------------------------------------------
+// Art pass -- runs after every scan and resolves artwork for rows the
+// normal scan didn't touch. Two populations:
+//   NULL art  = rows from before the art column existed (the in-place
+//               migration). Fully resolved WITHOUT re-reading audio:
+//               folder image check per directory, and for directories
+//               with no folder image but a track flagged embedded_art,
+//               ONE representative file is parsed to extract the cover.
+//   ''  art   = previously checked and found nothing. Gets the cheap
+//               folder-image recheck each scan (so dropping a
+//               cover.jpg into a folder later is picked up), but no
+//               repeated parse attempts.
+// ---------------------------------------------------------------------
+async function resolveArtPass(mm) {
+  const rows = stmts.unresolvedArt.all();
+  if (rows.length === 0) return null;
+  const startMs = Date.now();
+  // Three populations per directory: NULL rows need full resolution;
+  // '' and 'e:' rows only get the cheap folder-image recheck ('' so a
+  // later-added cover.jpg is picked up, 'e:' so a real folder image
+  // outranks an extracted embedded cover, per the f: > e: priority).
+  const dirs = new Map(); // dirRel -> { nullRows, upgradeRows, embeddedSample }
+  for (const row of rows) {
+    const dir = dirOf(row.path);
+    let d = dirs.get(dir);
+    if (!d) { d = { nullRows: [], upgradeRows: [], embeddedSample: null }; dirs.set(dir, d); }
+    (row.art === null ? d.nullRows : d.upgradeRows).push(row.path);
+    if (row.art === null && row.embedded_art === 1 && !d.embeddedSample) d.embeddedSample = row.path;
+  }
+  debugLog.info('scanner', `Art pass: resolving artwork for ${rows.length} track(s) across ${dirs.size} folder(s)...`);
+  const counts = { folders: dirs.size, folderImages: 0, embeddedExtracted: 0, none: 0 };
+  const updates = [];
+  let processedDirs = 0;
+  lastProgressLogMs = Date.now();
+  for (const [dir, d] of dirs) {
+    const folderArt = localLibrary.findFolderArt(dir);
+    if (folderArt) {
+      counts.folderImages += 1;
+      const art = `f:${folderArt}`;
+      for (const p of d.nullRows) updates.push([art, p]);
+      for (const p of d.upgradeRows) updates.push([art, p]);
+    } else if (d.nullRows.length > 0) {
+      // Full resolution needed (legacy rows): try one representative
+      // embedded cover; '' if the directory truly has nothing.
+      let art = '';
+      if (d.embeddedSample) {
+        try {
+          const meta = await mm.parseFile(path.join(path.resolve(localLibrary.MUSIC_DIR), d.embeddedSample));
+          const pics = (meta.common && meta.common.picture) || [];
+          const cached = pics.length > 0 ? ensureEmbeddedArtCached(dir, pics[0]) : null;
+          if (cached) { art = `e:${cached}`; counts.embeddedExtracted += 1; }
+        } catch (err) { /* leave '' */ }
+      }
+      if (!art) counts.none += 1;
+      for (const p of d.nullRows) updates.push([art, p]);
+    }
+    // upgrade-only dirs ('' / 'e:') with no folder image: leave as-is.
+    processedDirs += 1;
+    if (Date.now() - lastProgressLogMs >= PROGRESS_LOG_INTERVAL_MS) {
+      lastProgressLogMs = Date.now();
+      debugLog.info('scanner', `Art pass progress: ${processedDirs}/${dirs.size} folders`);
+    }
+  }
+  const apply = db.transaction((batch) => { for (const [art, p] of batch) stmts.setArt.run(art, p); });
+  for (let i = 0; i < updates.length; i += 2000) apply(updates.slice(i, i + 2000));
+  const summary = { ...counts, updatedRows: updates.length, durationSeconds: Math.round((Date.now() - startMs) / 1000) };
+  debugLog.info('scanner', `Art pass complete in ${summary.durationSeconds}s: ${counts.folderImages} folder image(s), ${counts.embeddedExtracted} embedded cover(s) extracted, ${counts.none} folder(s) without art.`);
+  return summary;
 }
 
 function writeIncompatibleFile() {
@@ -534,6 +680,8 @@ async function runScan() {
   const mm = require('music-metadata');
   const generation = Date.now();
 
+  // Fresh look at folder images every scan (see clearFolderArtCache).
+  localLibrary.clearFolderArtCache();
   const enumerateStartMs = Date.now();
   const files = await enumerateFiles();
   scanState.total = files.length;
@@ -563,6 +711,7 @@ async function runScan() {
 
   const removedTracks = stmts.deleteStaleTracks.run(generation).changes;
   const removedIncompatible = stmts.deleteStaleIncompatible.run(generation).changes;
+  const artPass = await resolveArtPass(mm);
   writeIncompatibleFile();
 
   scanState.lastScan = {
@@ -574,6 +723,7 @@ async function runScan() {
     skippedUnchanged: scanState.skippedUnchanged,
     incompatible: stmts.countIncompatible.get().c,
     removed: removedTracks + removedIncompatible,
+    artPass,
     totalTracksInLibrary: stmts.countTracks.get().c
   };
   stmts.setMeta.run('lastScan', JSON.stringify(scanState.lastScan));
