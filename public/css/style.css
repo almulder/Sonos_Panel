@@ -1996,3 +1996,44 @@ button:focus-visible,
 }
 .queuepanel__item.is-dragging { opacity: 0.45; }
 .queuepanel__item.is-drop-target { box-shadow: inset 0 2px 0 var(--amber); }
+
+
+/* ---------------- Container Play/Shuffle + playlist rename (v0.11.0) ---------------- */
+.sourcepanel__actions {
+  display: flex;
+  gap: 10px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--divider);
+  list-style: none;
+}
+.sourcepanel__actionbtn {
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.sourcepanel__actionbtn--primary {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #14181a;
+  font-weight: 700;
+}
+.sourcepanel__actionbtn:disabled { opacity: 0.5; }
+.sourcepanel__renamerow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.sourcepanel__renameinput {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 10px;
+  font-size: 14px;
+}

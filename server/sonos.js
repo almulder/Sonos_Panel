@@ -979,6 +979,24 @@ async function addUriToPlaylist(playlistId, uri, metadata) {
 // track in order. Sequential on purpose -- each AddURIToSavedQueue
 // depends on the playlist's current UpdateID, so firing them in
 // parallel would race and drop tracks.
+// Rename a Sonos Playlist in place. The library's UpdateObject wrapper
+// omits NewTagValue, so this goes through _request directly. Sonos
+// matches CurrentTagValue against the existing title, so the caller
+// supplies both.
+async function renameSonosPlaylist(playlistId, currentTitle, newTitle) {
+  if (usingMock) return { ok: true };
+  const device = devices[0];
+  if (!device) throw new Error('No Sonos device available');
+  await guarded(`renameSonosPlaylist(${playlistId})`, () =>
+    withTimeout(device.contentDirectoryService()._request('UpdateObject', {
+      ObjectID: playlistId,
+      CurrentTagValue: `dc:title,${currentTitle}`,
+      NewTagValue: `dc:title,${newTitle}`
+    }), DEVICE_CALL_TIMEOUT_MS, 'renameSonosPlaylist'));
+  invalidateContainerCache();
+  return { ok: true };
+}
+
 async function addContainerToPlaylist(roomName, playlistId, containerId) {
   if (localBrowse.flattenContainerId) containerId = localBrowse.flattenContainerId(containerId);
   if (usingMock) return { added: 0, failed: 0 };
@@ -1704,11 +1722,90 @@ function extractStationToken(uri) {
 const FAVORITES_CACHE_MS = 30000;
 let favoritesCache = { items: null, at: 0, refreshing: false };
 
+// ---------------------------------------------------------------------
+// Household service accounts -- Sonos supports multiple logins of the
+// same service (three Pandora accounts, say); each favorite's URI
+// carries sn=<serial> naming which one it belongs to, and the speakers
+// expose a local endpoint mapping serials to account nicknames. Labeled
+// favorites let each person pick THEIR station, which matters because
+// the one-stream-per-account limit is service-side: two rooms on the
+// same Pandora account stop each other no matter which app drives them.
+// ---------------------------------------------------------------------
+let accountsCache = { map: null, at: 0 };
+const ACCOUNTS_CACHE_MS = 10 * 60 * 1000;
+
+function fetchAccountsXml(host) {
+  return new Promise((resolve, reject) => {
+    const req = require('http').get({ host, port: 1400, path: '/status/accounts', timeout: 3000 }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve(body));
+    });
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.on('error', reject);
+  });
+}
+
+async function getHouseholdAccounts() {
+  if (accountsCache.map && Date.now() - accountsCache.at < ACCOUNTS_CACHE_MS) return accountsCache.map;
+  const map = {};
+  try {
+    const device = devices[0];
+    if (!device) return map;
+    const xml = await fetchAccountsXml(device.host);
+    // <Account Type="60423" SerialNum="1" ...><UN>user@x</UN><NN>Nick</NN></Account>
+    const accountRe = /<Account\b([^>]*)>([\s\S]*?)<\/Account>/g;
+    let m;
+    while ((m = accountRe.exec(xml)) !== null) {
+      const attrs = m[1];
+      const inner = m[2];
+      const type = (attrs.match(/Type="(\d+)"/) || [])[1];
+      const serial = (attrs.match(/SerialNum="(\d+)"/) || [])[1];
+      if (!type || serial === undefined) continue;
+      const nn = (inner.match(/<NN>([^<]*)<\/NN>/) || [])[1];
+      const un = (inner.match(/<UN>([^<]*)<\/UN>/) || [])[1];
+      map[`${type}:${serial}`] = (nn && nn.trim()) || (un && un.trim()) || `Account ${serial}`;
+    }
+    accountsCache = { map, at: Date.now() };
+  } catch (err) {
+    // Endpoint unavailable (locked-down firmware, etc.) -- sn-only
+    // fallback labels still get applied by the enrichment below.
+    debugLog.warn('sonos', `getHouseholdAccounts failed: ${err.message}`);
+    accountsCache = { map, at: Date.now() };
+  }
+  return map;
+}
+
+// Appends " · <account>" to favorites' service labels -- but only for
+// services that actually have MULTIPLE accounts represented in the
+// favorites, so single-login services stay clean.
+async function labelFavoriteAccounts(items) {
+  const bySid = new Map();
+  for (const item of items) {
+    const sid = (String(item.uri || '').match(/[?&]sid=(\d+)/) || [])[1];
+    const sn = (String(item.uri || '').match(/[?&]sn=(\d+)/) || [])[1];
+    if (!sid || sn === undefined) continue;
+    if (!bySid.has(sid)) bySid.set(sid, new Set());
+    bySid.get(sid).add(sn);
+  }
+  const multiSids = [...bySid.entries()].filter(([, sns]) => sns.size > 1).map(([sid]) => sid);
+  if (multiSids.length === 0) return items;
+  const accounts = await getHouseholdAccounts();
+  return items.map((item) => {
+    const sid = (String(item.uri || '').match(/[?&]sid=(\d+)/) || [])[1];
+    const sn = (String(item.uri || '').match(/[?&]sn=(\d+)/) || [])[1];
+    if (!sid || sn === undefined || !multiSids.includes(sid)) return item;
+    // Sonos convention: account Type = sid * 256 + 7.
+    const label = accounts[`${sid * 256 + 7}:${sn}`] || `Account ${sn}`;
+    return { ...item, serviceLabel: `${item.serviceLabel || 'Service'} \u00b7 ${label}` };
+  });
+}
+
 async function refreshFavoritesCache(roomName) {
   if (favoritesCache.refreshing) return favoritesCache.items || [];
   favoritesCache.refreshing = true;
   try {
-    const items = await browseContainer(roomName, 'FV:2');
+    const items = await labelFavoriteAccounts(await browseContainer(roomName, 'FV:2'));
     favoritesCache = { items, at: Date.now(), refreshing: false };
     return items;
   } catch (err) {
@@ -2563,6 +2660,7 @@ module.exports = {
   saveQueueAsPlaylist,
   setGroupMembers,
   setRepeat,
+  renameSonosPlaylist,
   getQueue,
   addTracksToQueue,
   addContainerToQueue,

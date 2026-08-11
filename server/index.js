@@ -390,6 +390,16 @@ app.post('/api/sonos/playlists', asyncHandler(async (req, res) => {
   res.json({ playlist });
 }));
 
+// Rename a Sonos Playlist -- currentTitle rides along because Sonos's
+// UpdateObject matches the existing tag value before applying the new.
+app.put('/api/sonos/playlists/:id', asyncHandler(async (req, res) => {
+  const newTitle = String(req.body.title || '').trim();
+  const currentTitle = String(req.body.currentTitle || '').trim();
+  if (!newTitle) return res.status(400).json({ error: 'A playlist needs a name' });
+  await sonos.renameSonosPlaylist(req.params.id, currentTitle, newTitle);
+  res.json({ ok: true });
+}));
+
 app.delete('/api/sonos/playlists/:id', asyncHandler(async (req, res) => {
   const ok = await sonos.deleteSonosPlaylist(req.params.id);
   res.json({ ok });
