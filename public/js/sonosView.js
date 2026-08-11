@@ -157,6 +157,7 @@ const SonosView = (() => {
   const sleepTimerBtn = document.getElementById('sonosSleepTimerBtn');
   const sleepTimerBadge = document.getElementById('sonosSleepTimerBadge');
   const sleepTimerMenu = document.getElementById('sonosSleepTimerMenu');
+  const sleepTimerOverlay = document.getElementById('sonosSleepTimerOverlay');
 
   const sourcePanel = document.getElementById('sourcePanel');
   const sourcePanelTitle = document.getElementById('sourcePanelTitle');
@@ -1203,7 +1204,7 @@ const SonosView = (() => {
     const offBtn = document.createElement('button');
     offBtn.textContent = 'Off';
     offBtn.addEventListener('click', async () => {
-      sleepTimerMenu.style.display = 'none';
+      sleepTimerOverlay.style.display = 'none';
       if (!focusedRoom) return;
       await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/sleeptimer`, {
         method: 'POST',
@@ -1220,7 +1221,7 @@ const SonosView = (() => {
       const btn = document.createElement('button');
       btn.textContent = mins < 60 ? `${mins}m` : (mins % 60 === 0 ? `${mins / 60}h` : `${(mins / 60).toFixed(1)}h`);
       btn.addEventListener('click', async () => {
-        sleepTimerMenu.style.display = 'none';
+        sleepTimerOverlay.style.display = 'none';
         if (!focusedRoom) return;
         await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/sleeptimer`, {
           method: 'POST',
@@ -1237,11 +1238,16 @@ const SonosView = (() => {
 
   sleepTimerBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    sleepTimerMenu.style.display = sleepTimerMenu.style.display === 'none' ? '' : 'none';
+    sleepTimerOverlay.style.display = sleepTimerOverlay.style.display === 'none' ? 'flex' : 'none';
   });
-  document.addEventListener('click', (e) => {
-    if (!sleepTimerMenu.contains(e.target) && e.target !== sleepTimerBtn) {
-      sleepTimerMenu.style.display = 'none';
+  // Overlay closes on backdrop tap or Escape (selecting a duration
+  // already closes it in the option handlers above).
+  sleepTimerOverlay.addEventListener('click', (e) => {
+    if (e.target === sleepTimerOverlay) sleepTimerOverlay.style.display = 'none';
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sleepTimerOverlay.style.display !== 'none') {
+      sleepTimerOverlay.style.display = 'none';
     }
   });
 

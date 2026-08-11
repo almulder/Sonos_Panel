@@ -1002,16 +1002,19 @@ button {
    Sleep timer
 --------------------------------------------------------------------- */
 .sleeptimer {
+  /* Mirrors the fullscreen button's column: identical size and right
+     offset (their centers align vertically), anchored to the opposite
+     corner -- lower and clear of the transport controls. */
   position: absolute;
-  bottom: 14px;
-  right: 14px;
+  bottom: 10px;
+  right: 10px;
   z-index: 5;
 }
 
 .sleeptimer__btn {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: none;
   background: var(--panel-raised);
@@ -1043,21 +1046,47 @@ button {
   line-height: 1;
 }
 
-.sleeptimer__menu {
-  position: absolute;
-  bottom: 46px;
-  right: 0;
+/* The duration picker is a fixed overlay (same family as the queue
+   action sheet), NOT a popover anchored to the button -- the old
+   anchored version grew upward inside the now-playing container, got
+   its top clipped, and trapped its scrolling in that corner. */
+.sleepmenu {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 70;
+}
+.sleepmenu__sheet {
+  width: min(240px, 80vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
   background: var(--panel-raised);
   border: 1px solid var(--divider);
   border-radius: var(--radius);
-  list-style: none;
-  padding: 6px;
-  max-height: 320px;
-  overflow-y: auto;
-  min-width: 90px;
+  padding: 10px 6px 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
-.sleeptimer__menu li button {
+.sleepmenu__label {
+  margin: 0 0 6px;
+  padding: 0 10px;
+  font-family: var(--font-label);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  text-align: center;
+}
+.sleepmenu__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+.sleepmenu__list li button {
   display: block;
   width: 100%;
   text-align: left;
@@ -1069,8 +1098,8 @@ button {
   font-family: var(--font-label);
   font-size: 13px;
 }
-.sleeptimer__menu li button:hover,
-.sleeptimer__menu li button:focus {
+.sleepmenu__list li button:hover,
+.sleepmenu__list li button:focus {
   background: var(--panel);
 }
 
