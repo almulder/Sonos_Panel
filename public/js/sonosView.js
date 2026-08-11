@@ -286,11 +286,14 @@ const SonosView = (() => {
     wrap.appendChild(slider);
     wrap.appendChild(valueLabel);
 
-    // Only the focused room shows this -- with a group expanded, whichever
-    // specific room (coordinator or member) is actually focused gets it,
-    // not always the coordinator, so there's never more than one visible
-    // at once.
-    if (room.name === focusedRoom) {
+    // Top-level rows show this only when focused (keeps the list
+    // quiet); grouped MEMBER rows show it always -- bass/treble/
+    // loudness are per-speaker settings, and members are only visible
+    // once their group is deliberately expanded, so each grouped room
+    // stays individually tweakable without extra taps. (The original
+    // focused-only rule technically covered members too, but member
+    // rows had no way to BECOME focused, so their EQ was unreachable.)
+    if (room.name === focusedRoom || room.coordinator !== room.name) {
       const eqBtn = document.createElement('button');
       eqBtn.className = 'roomrow__eqbtn';
       eqBtn.setAttribute('aria-label', `${room.name} sound settings`);
@@ -390,6 +393,11 @@ const SonosView = (() => {
 
     const main = document.createElement('div');
     main.className = 'roomrow__main roomrow__main--member';
+    // Members are focusable too -- the volume rail then targets that
+    // one room's own volume instead of the group master.
+    main.addEventListener('click', async () => {
+      await selectFocusedRoom(room.name);
+    });
     if (room.muted) {
       const muteIcon = document.createElement('span');
       muteIcon.className = 'roomrow__mute-icon';
