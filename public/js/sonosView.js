@@ -2012,8 +2012,13 @@ const SonosView = (() => {
         icon.textContent = '\u{1F50C}';
         li.appendChild(icon);
       } else {
-        if (item.serviceLabel) {
-          li.appendChild(buildImgIconWithFallback(iconFilenameForService(item.serviceLabel)));
+        if (item.serviceLabel || item.groupTitle) {
+          // groupTitle is the sid-merged service name ("Pandora") --
+          // raw serviceLabel varies per favorite type ("Pandora
+          // Playlist") and misses the icon file, falling back to the
+          // star. Prefer the merged name so every account's items
+          // carry the same service icon.
+          li.appendChild(buildImgIconWithFallback(iconFilenameForService(item.groupTitle || item.serviceLabel)));
         }
         const art = document.createElement('div');
         art.className = 'sourcepanel__art';
