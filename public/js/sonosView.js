@@ -314,6 +314,23 @@ const SonosView = (() => {
     li.className = 'roomrow';
     if (room.name === focusedRoom) li.classList.add('is-focused');
 
+    // Group icon sits on the LEFT, in the slot the old checkboxes
+    // occupied -- top-level rows only (members are managed from the
+    // dialog of the room that anchors their group).
+    const groupBtn = document.createElement('button');
+    groupBtn.className = 'roomrow__groupbtn';
+    groupBtn.setAttribute('aria-label', `Group rooms with ${room.name}`);
+    const groupIcon = document.createElement('img');
+    groupIcon.src = 'icons/group-rooms.png';
+    groupIcon.alt = '';
+    groupIcon.className = 'roomrow__groupicon';
+    groupBtn.appendChild(groupIcon);
+    groupBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (window.GroupDialog) window.GroupDialog.open(room.name);
+    });
+    li.appendChild(groupBtn);
+
     const main = document.createElement('div');
     main.className = 'roomrow__main';
     main.addEventListener('click', async () => {
@@ -364,20 +381,6 @@ const SonosView = (() => {
 
     li.appendChild(main);
     li.appendChild(buildVolumeControl(room));
-
-    const groupBtn = document.createElement('button');
-    groupBtn.className = 'roomrow__groupbtn';
-    groupBtn.setAttribute('aria-label', `Group rooms with ${room.name}`);
-    const groupIcon = document.createElement('img');
-    groupIcon.src = 'icons/group-rooms.png';
-    groupIcon.alt = '';
-    groupIcon.className = 'roomrow__groupicon';
-    groupBtn.appendChild(groupIcon);
-    groupBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (window.GroupDialog) window.GroupDialog.open(room.name);
-    });
-    li.appendChild(groupBtn);
     return li;
   }
 
