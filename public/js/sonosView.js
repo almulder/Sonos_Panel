@@ -112,7 +112,38 @@ function buildImgIconWithFallback(filename) {
   return img;
 }
 
+// Service resolution now lives in icons/music_services.js -- a plain
+// user-editable directory (key: 'Display Name'). Keys are the stream's
+// service name lowercased with punctuation stripped; a label MATCHES a
+// key by prefix, so one 'pandora' entry covers "Pandora", "Pandora
+// Playlist", "Pandora Station". Icon file = <key>.png in that folder.
+// Unmapped services display their raw label -- which is exactly the
+// key a user needs to add to the file.
+const serviceKeysByLength = (typeof window !== 'undefined' && window.MUSIC_SERVICES)
+  ? Object.keys(window.MUSIC_SERVICES).sort((a, b) => b.length - a.length)
+  : [];
+
+function normalizeServiceKey(str) {
+  return String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function resolveService(label) {
+  const n = normalizeServiceKey(label);
+  if (!n) return null;
+  for (const k of serviceKeysByLength) {
+    if (n.startsWith(k)) return { key: k, display: window.MUSIC_SERVICES[k] };
+  }
+  return null;
+}
+
+function displayService(label) {
+  const r = resolveService(label);
+  return r ? r.display : label;
+}
+
 function iconFilenameForService(serviceLabel) {
+  const r = resolveService(serviceLabel);
+  if (r) return r.key;
   return SERVICE_ICON_FILES[serviceLabel] || 'default';
 }
 
@@ -1355,7 +1386,7 @@ const SonosView = (() => {
     }
 
     currentGroup = group.title;
-    sourcePanelTitle.textContent = group.title;
+    sourcePanelTitle.textContent = group.id && String(group.id).startsWith('svc:') ? displayService(group.title) : group.title;
     sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
     const data = await api(
       `/api/sonos/room/${encodeURIComponent(focusedRoom)}/favorites-by-group?group=${encodeURIComponent(group.title)}`
@@ -1392,7 +1423,7 @@ const SonosView = (() => {
       header.className = 'sourcepanel__groupheader';
       header.appendChild(buildImgIconWithFallback(iconFilenameForService(serviceLabel)));
       const headerLabel = document.createElement('span');
-      headerLabel.textContent = serviceLabel;
+      headerLabel.textContent = displayService(serviceLabel);
       header.appendChild(headerLabel);
       sourcePanelItems.appendChild(header);
 
@@ -1458,7 +1489,7 @@ const SonosView = (() => {
       labelBlock.className = 'sourcepanel__labelblock';
       const label = document.createElement('span');
       label.className = 'sourcepanel__label';
-      label.textContent = group.title;
+      label.textContent = group.id && String(group.id).startsWith('svc:') ? displayService(group.title) : group.title;
       labelBlock.appendChild(label);
       li.appendChild(labelBlock);
 
