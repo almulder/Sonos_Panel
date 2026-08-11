@@ -63,6 +63,37 @@ const DISCOVERY_TIMEOUT_MS = 8000;
 // way config.json does. Applying one just calls the existing groupRooms
 // with its stored room list -- no new grouping logic needed.
 const savedGroupsPath = path.join(dataDir, 'saved-groups.json');
+// Panel-side names for service account serials ("Albert's Playlists")
+// -- the speakers' own account endpoint gave bare serials on current
+// firmware, so naming lives here, editable from the panel.
+const accountNamesPath = path.join(dataDir, 'account-names.json');
+let accountNames = null;
+function loadAccountNames() {
+  if (accountNames) return accountNames;
+  try {
+    accountNames = JSON.parse(require('fs').readFileSync(accountNamesPath, 'utf8'));
+  } catch (err) {
+    accountNames = {};
+  }
+  return accountNames;
+}
+function setAccountName(sn, name) {
+  loadAccountNames();
+  accountNames[String(sn)] = String(name || '').trim();
+  if (!accountNames[String(sn)]) delete accountNames[String(sn)];
+  try {
+    require('fs').writeFileSync(accountNamesPath, JSON.stringify(accountNames, null, 2));
+  } catch (err) {
+    debugLog.warn('sonos', `setAccountName: could not persist: ${err.message}`);
+  }
+  return accountNames;
+}
+function accountLabelFor(sid, sn) {
+  const names = loadAccountNames();
+  if (names[String(sn)]) return names[String(sn)];
+  const household = accountsCache.map || {};
+  return household[`${Number(sid) * 256 + 7}:${sn}`] || `Account ${sn}`;
+}
 function loadSavedGroups() {
   try {
     return JSON.parse(fs.readFileSync(savedGroupsPath, 'utf8'));
@@ -167,8 +198,9 @@ function buildMockState() {
     // navigation is exercisable without real hardware.
     browse: {
       'FV:2': [
-        { id: 'FV:2/mock-1', title: 'Morning Jazz (mock favorite)', albumArtUrl: null, browsable: false, uri: 'mock://fav1', serviceLabel: 'Pandora' },
-        { id: 'FV:2/mock-2', title: 'Classic Rock Radio (mock favorite)', albumArtUrl: null, browsable: false, uri: 'mock://fav2', serviceLabel: 'iHeartRadio' }
+        { id: 'FV:2/mock-1', title: 'Morning Jazz (mock favorite)', albumArtUrl: null, browsable: false, uri: 'x-sonosapi-radio:ST%3a1?sid=236&flags=8300&sn=16', serviceLabel: 'Pandora' },
+        { id: 'FV:2/mock-3', title: 'Wife Chill Mix (mock favorite)', albumArtUrl: null, browsable: false, uri: 'x-sonosapi-radio:ST%3a2?sid=236&flags=8300&sn=17', serviceLabel: 'Pandora Playlist' },
+        { id: 'FV:2/mock-2', title: 'Classic Rock Radio (mock favorite)', albumArtUrl: null, browsable: false, uri: 'mock://fav2?sid=245&sn=1', serviceLabel: 'iHeartRadio' }
       ],
       'SQ:': [
         { id: 'SQ:mock-1', title: 'Road Trip Mix (mock playlist)', albumArtUrl: null, browsable: true, uri: null, serviceLabel: null }
@@ -1776,36 +1808,31 @@ async function getHouseholdAccounts() {
   return map;
 }
 
-// Appends " · <account>" to favorites' service labels -- but only for
-// services that actually have MULTIPLE accounts represented in the
-// favorites, so single-login services stay clean.
-async function labelFavoriteAccounts(items) {
-  const bySid = new Map();
-  for (const item of items) {
+// Attaches sid/sn/groupTitle to each favorite WITHOUT touching
+// serviceLabel (mutating it broke the service-icon mapping and split
+// "Pandora" / "Pandora Playlist" groups). The group title for a
+// service id is the SHORTEST label its favorites carry -- Sonos's own
+// r:description varies per favorite type ("Pandora" vs "Pandora
+// Playlist"), and the shortest is the service's plain name.
+async function attachAccountInfo(items) {
+  const sidTitles = new Map();
+  const enriched = items.map((item) => {
     const sid = (String(item.uri || '').match(/[?&]sid=(\d+)/) || [])[1];
     const sn = (String(item.uri || '').match(/[?&]sn=(\d+)/) || [])[1];
-    if (!sid || sn === undefined) continue;
-    if (!bySid.has(sid)) bySid.set(sid, new Set());
-    bySid.get(sid).add(sn);
-  }
-  const multiSids = [...bySid.entries()].filter(([, sns]) => sns.size > 1).map(([sid]) => sid);
-  if (multiSids.length === 0) return items;
-  const accounts = await getHouseholdAccounts();
-  return items.map((item) => {
-    const sid = (String(item.uri || '').match(/[?&]sid=(\d+)/) || [])[1];
-    const sn = (String(item.uri || '').match(/[?&]sn=(\d+)/) || [])[1];
-    if (!sid || sn === undefined || !multiSids.includes(sid)) return item;
-    // Sonos convention: account Type = sid * 256 + 7.
-    const label = accounts[`${sid * 256 + 7}:${sn}`] || `Account ${sn}`;
-    return { ...item, serviceLabel: `${item.serviceLabel || 'Service'} \u00b7 ${label}` };
+    if (!sid) return item;
+    const label = item.serviceLabel || 'Other';
+    if (!sidTitles.has(sid) || label.length < sidTitles.get(sid).length) sidTitles.set(sid, label);
+    return { ...item, sid, sn };
   });
+  getHouseholdAccounts().catch(() => {}); // warm the nickname fallback quietly
+  return enriched.map((item) => (item.sid ? { ...item, groupTitle: sidTitles.get(item.sid) } : item));
 }
 
 async function refreshFavoritesCache(roomName) {
   if (favoritesCache.refreshing) return favoritesCache.items || [];
   favoritesCache.refreshing = true;
   try {
-    const items = await labelFavoriteAccounts(await browseContainer(roomName, 'FV:2'));
+    const items = await attachAccountInfo(await browseContainer(roomName, 'FV:2'));
     favoritesCache = { items, at: Date.now(), refreshing: false };
     return items;
   } catch (err) {
@@ -2495,7 +2522,7 @@ async function getLineInRooms() {
 // supports browsing them generically if that changes again later.
 
 function groupLabelFor(item) {
-  return item.serviceLabel || 'Other';
+  return item.groupTitle || item.serviceLabel || 'Other';
 }
 
 async function getSourceGroups(roomName) {
@@ -2600,11 +2627,33 @@ async function getPlaylists(roomName) {
   return playlistsCache.items;
 }
 
-async function getFavoritesByGroup(roomName, groupLabel) {
+async function getFavoritesByGroup(roomName, groupLabel, sn) {
   const favorites = await getFavorites(roomName);
   const filtered = favorites.filter((item) => groupLabelFor(item) === groupLabel);
-  filtered.sort((a, b) => a.title.localeCompare(b.title));
-  return filtered;
+  const sns = [...new Set(filtered.map((i) => i.sn).filter((v) => v !== undefined))];
+  // Multiple accounts of this service: the group opens to a user list
+  // ("Albert's Playlists" / "Family's Playlists"), each browsing to
+  // that account's own favorites -- so nobody stops anyone else's
+  // stream by grabbing a station from the wrong login.
+  if (sns.length > 1 && sn === undefined) {
+    return sns
+      .sort((a, b) => Number(a) - Number(b))
+      .map((serial) => {
+        const mine = filtered.filter((i) => i.sn === serial);
+        return {
+          id: `fvacct:${mine[0].sid}:${serial}`,
+          title: accountLabelFor(mine[0].sid, serial),
+          browsable: true,
+          isAccountEntry: true,
+          sn: serial,
+          count: mine.length,
+          serviceLabel: groupLabel
+        };
+      });
+  }
+  const items = sn === undefined ? filtered : filtered.filter((i) => i.sn === String(sn));
+  items.sort((a, b) => a.title.localeCompare(b.title));
+  return items;
 }
 
 function isMock() {
@@ -2661,6 +2710,8 @@ module.exports = {
   setGroupMembers,
   setRepeat,
   renameSonosPlaylist,
+  setAccountName,
+  loadAccountNames,
   getQueue,
   addTracksToQueue,
   addContainerToQueue,

@@ -359,8 +359,19 @@ app.get('/api/sonos/room/:room/source-groups', asyncHandler(async (req, res) => 
 app.get('/api/sonos/room/:room/favorites-by-group', asyncHandler(async (req, res) => {
   const group = req.query.group;
   if (!group) return res.status(400).json({ error: 'Missing required query param: group' });
-  const items = await sonos.getFavoritesByGroup(req.params.room, group);
+  const items = await sonos.getFavoritesByGroup(req.params.room, group, req.query.sn);
   res.json({ items });
+}));
+
+// Panel-side names for service account serials -- shown as the user
+// list when a service has multiple logins.
+app.get('/api/sonos/account-names', (req, res) => {
+  res.json({ names: sonos.loadAccountNames() });
+});
+app.put('/api/sonos/account-names', asyncHandler(async (req, res) => {
+  const { sn, name } = req.body;
+  if (sn === undefined) return res.status(400).json({ error: 'Missing sn' });
+  res.json({ names: sonos.setAccountName(sn, name) });
 }));
 
 app.get('/api/sonos/room/:room/playlists', asyncHandler(async (req, res) => {

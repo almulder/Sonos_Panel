@@ -1927,6 +1927,85 @@ const SonosView = (() => {
       const li = document.createElement('li');
       li.className = 'sourcepanel__item';
 
+      // Account entry ("Albert's Playlists") -- the user list a
+      // multi-login service opens to. Tapping drills to that account's
+      // own favorites; the pencil renames it inline.
+      if (item.isAccountEntry) {
+        if (item.serviceLabel) li.appendChild(buildImgIconWithFallback(iconFilenameForService(item.serviceLabel)));
+        const labelBlock = document.createElement('div');
+        labelBlock.className = 'sourcepanel__labelblock';
+        const label = document.createElement('span');
+        label.className = 'sourcepanel__label';
+        label.textContent = item.title;
+        labelBlock.appendChild(label);
+        const sub = document.createElement('span');
+        sub.className = 'sourcepanel__servicelabel';
+        sub.textContent = `${item.count} favorite${item.count === 1 ? '' : 's'}`;
+        labelBlock.appendChild(sub);
+        li.appendChild(labelBlock);
+
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'sourcepanel__removebtn';
+        renameBtn.textContent = '\u270F\uFE0F';
+        renameBtn.setAttribute('aria-label', `Rename ${item.title}`);
+        renameBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          labelBlock.innerHTML = '';
+          li.classList.add('sourcepanel__renamerow');
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'sourcepanel__renameinput';
+          input.value = item.title.startsWith('Account ') ? '' : item.title;
+          input.placeholder = "e.g. Albert's Playlists";
+          input.addEventListener('click', (e2) => e2.stopPropagation());
+          const save = document.createElement('button');
+          save.className = 'sourcepanel__actionbtn sourcepanel__actionbtn--primary';
+          save.textContent = 'Save';
+          save.addEventListener('click', async (e2) => {
+            e2.stopPropagation();
+            save.textContent = '\u2026';
+            await api('/api/sonos/account-names', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sn: item.sn, name: input.value.trim() })
+            });
+            const data = await api(
+              `/api/sonos/room/${encodeURIComponent(focusedRoom)}/favorites-by-group?group=${encodeURIComponent(item.serviceLabel)}`
+            );
+            renderLeafItems(data.items || [], 'Nothing here.');
+          });
+          labelBlock.appendChild(input);
+          labelBlock.appendChild(save);
+          input.focus();
+        });
+        li.appendChild(renameBtn);
+
+        const chevron = document.createElement('span');
+        chevron.className = 'sourcepanel__chevron';
+        chevron.textContent = '\u203A';
+        li.appendChild(chevron);
+
+        li.addEventListener('click', async () => {
+          backStack.push(async () => {
+            sourcePanelTitle.textContent = item.serviceLabel;
+            const data = await api(
+              `/api/sonos/room/${encodeURIComponent(focusedRoom)}/favorites-by-group?group=${encodeURIComponent(item.serviceLabel)}`
+            );
+            renderLeafItems(data.items || [], 'Nothing here.');
+          });
+          updateBackButtonVisibility();
+          sourcePanelTitle.textContent = item.title;
+          sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
+          const data = await api(
+            `/api/sonos/room/${encodeURIComponent(focusedRoom)}/favorites-by-group?group=${encodeURIComponent(item.serviceLabel)}&sn=${encodeURIComponent(item.sn)}`
+          );
+          renderLeafItems(data.items || [], 'Nothing here.');
+        });
+
+        sourcePanelItems.appendChild(li);
+        return;
+      }
+
       if (item.isLineInLeaf) {
         const icon = document.createElement('span');
         icon.className = 'sourcepanel__icon';
