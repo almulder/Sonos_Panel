@@ -195,8 +195,20 @@ step:
    `<appdata>/artcache` and served from there -- so albums with only
    embedded art get covers everywhere (browse, playlists, playback),
    and browse pages render faster because no filesystem lookups happen
-   per row. Dropping a cover image into a folder later is picked up by
-   the next scan and outranks the extracted one.
+   per row. Art is fully SELF-HEALING as of v0.10.0: every scan
+   re-verifies each folder -- a later-added cover image is picked up
+   and outranks the extracted one, a deleted cover downgrades cleanly
+   to the embedded extraction (or none), a wiped art cache regenerates
+   itself, and replacing the cover embedded in the files refreshes the
+   cache the moment the retagged files are re-scanned. Browsing got
+   smarter at scale too (v0.10.0): a unified Search category queries
+   artists, albums, and songs together; Recently Added surfaces the
+   newest files first; multi-value tags split properly ("Electronic;
+   Ambient" lists under both genres, "Lennon; McCartney" under both
+   composers); letter buckets strip leading articles and fold accents
+   ("The Beatles" under B, "Exito" under E); and every artist opens
+   with an All Songs entry -- artists and genres are directly
+   queueable from their menus.
 4. **Queue management -- DONE (this release):** an "Up Next" view
    (a QUEUE tab beside SOURCES in the source panel, v0.7.1) showing the
    focused room's group queue with the current track highlighted -- tap a track
@@ -208,7 +220,13 @@ step:
    Favorites, playlists, and the queue now also refresh live via
    ContentDirectory/Queue events when edited from anywhere (including
    the phone app), and grabbing the group volume slider snapshots
-   member ratios first so balance survives a drag to zero. (A separate
+   member ratios first so balance survives a drag to zero. v0.10.0
+   added a REPEAT button beside shuffle (off / all / repeat-one,
+   riding the same play mode -- so it works for playlists too, since
+   they play through the queue), drag-to-reorder in the queue list
+   (arrows remain for precision), live refreshes that keep however
+   many pages you'd loaded, and rooms shown as disconnected get their
+   group icon disabled until they're back. (A separate
    panel-native playlist system was originally planned here, but Sonos
    playlists store local tracks with full metadata since v0.5.2 -- only
    worth building if Sonos-side limits ever bite.)

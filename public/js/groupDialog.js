@@ -98,7 +98,7 @@ const GroupDialog = (() => {
     rooms
       .filter((r) => r.name !== roomName)
       .sort((a, b) => a.name.localeCompare(b.name))
-      .forEach((r) => listEl.appendChild(renderRoomRow(r, r.coordinator === roomName, false)));
+      .forEach((r) => listEl.appendChild(renderRoomRow(r, r.coordinator === roomName, r.reachable === false)));
   }
 
   function close() {

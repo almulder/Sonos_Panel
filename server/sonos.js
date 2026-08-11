@@ -980,6 +980,7 @@ async function addUriToPlaylist(playlistId, uri, metadata) {
 // depends on the playlist's current UpdateID, so firing them in
 // parallel would race and drop tracks.
 async function addContainerToPlaylist(roomName, playlistId, containerId) {
+  if (localBrowse.flattenContainerId) containerId = localBrowse.flattenContainerId(containerId);
   if (usingMock) return { added: 0, failed: 0 };
   const { items } = await browseContainerPaged(roomName, containerId, 0, 200);
   const tracks = items.filter((i) => !i.browsable && i.uri);
@@ -1131,7 +1132,7 @@ async function getNowPlaying(roomName) {
         return 0;
       })
     ]);
-    const { shuffle: shuffleOn } = decomposePlayMode(playMode);
+    const { shuffle: shuffleOn, repeat: repeatMode } = decomposePlayMode(playMode);
 
     // Source line: identifies WHERE the audio is coming from, since
     // title/artist alone don't cover this -- confirmed useful in
@@ -1249,6 +1250,7 @@ async function getNowPlaying(roomName) {
       playMode,
       shuffleOn,
       shuffleAvailable,
+      repeatMode: typeof repeatMode !== 'undefined' ? (repeatMode === 'none' ? 'off' : repeatMode) : 'off',
       nextTrack,
       crossfadeOn,
       sleepTimerRemainingSeconds,
@@ -1359,6 +1361,29 @@ async function setShuffle(roomName, enabled) {
     const currentMode = await device.getPlayMode();
     const { repeat } = decomposePlayMode(currentMode);
     await device.setPlayMode(composePlayMode(enabled, repeat));
+  });
+}
+
+// Repeat is the second axis of the same PlayMode string shuffle lives
+// in (NORMAL / REPEAT_ALL / REPEAT_ONE and their SHUFFLE_* twins) --
+// so like setShuffle, this reads the current mode and recomposes,
+// preserving whatever shuffle state is active. Applies to anything
+// queue-backed, which includes playlists (they play THROUGH the queue).
+async function setRepeat(roomName, mode) {
+  const repeat = mode === 'all' ? 'all' : (mode === 'one' ? 'one' : 'none');
+  if (usingMock) {
+    if (mockState.nowPlaying[roomName]) {
+      const { shuffle } = decomposePlayMode(mockState.nowPlaying[roomName].playMode || 'NORMAL');
+      mockState.nowPlaying[roomName].playMode = composePlayMode(shuffle, repeat);
+    }
+    return;
+  }
+  const device = findDevice(roomName);
+  if (!device) return;
+  await guarded(`setRepeat(${roomName}, ${repeat})`, async () => {
+    const currentMode = await device.getPlayMode();
+    const { shuffle } = decomposePlayMode(currentMode);
+    await device.setPlayMode(composePlayMode(shuffle, repeat));
   });
 }
 
@@ -2106,6 +2131,10 @@ async function addTracksToQueue(roomName, tracks, mode) {
 // playlists and A: library albums), capped at 500 tracks per action.
 async function addContainerToQueue(roomName, containerId, mode) {
   if (usingMock) return { queued: 3, mode };
+  // Artist and genre containers browse to ALBUM items (browsable, no
+  // uris) -- flatten them to their all-tracks twins so queueing an
+  // artist or genre actually queues music.
+  if (localBrowse.flattenContainerId) containerId = localBrowse.flattenContainerId(containerId);
   const tracks = [];
   let startIdx = 0;
   for (;;) {
@@ -2533,6 +2562,7 @@ module.exports = {
   removeTrackFromPlaylist,
   saveQueueAsPlaylist,
   setGroupMembers,
+  setRepeat,
   getQueue,
   addTracksToQueue,
   addContainerToQueue,

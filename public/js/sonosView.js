@@ -159,6 +159,22 @@ const SonosView = (() => {
   const nextBtn = document.getElementById('sonosNext');
   const shuffleBtn = document.getElementById('sonosShuffleBtn');
   const crossfadeBtn = document.getElementById('sonosCrossfadeBtn');
+  const repeatBtn = document.getElementById('sonosRepeatBtn');
+  const repeatDot = document.getElementById('sonosRepeatDot');
+  const repeatOneEl = document.getElementById('sonosRepeatOne');
+  if (repeatBtn) {
+    repeatBtn.addEventListener('click', async () => {
+      if (!focusedRoom || repeatBtn.disabled) return;
+      const current = (lastNowPlayingTrack && lastNowPlayingTrack.repeatMode) || 'off';
+      const next = current === 'off' ? 'all' : (current === 'all' ? 'one' : 'off');
+      await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/repeat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: next })
+      });
+      await refreshNowPlaying();
+    });
+  }
   const sleepTimerBtn = document.getElementById('sonosSleepTimerBtn');
   const sleepTimerBadge = document.getElementById('sonosSleepTimerBadge');
   const sleepTimerMenu = document.getElementById('sonosSleepTimerMenu');
@@ -333,10 +349,16 @@ const SonosView = (() => {
     groupIcon.alt = '';
     groupIcon.className = 'roomrow__groupicon';
     groupBtn.appendChild(groupIcon);
-    groupBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (window.GroupDialog) window.GroupDialog.open(room.name);
-    });
+    if (room.reachable === false) {
+      // Grouping a room that can't receive commands only produces a
+      // failed join -- disabled (dimmed via CSS) until it's back.
+      groupBtn.disabled = true;
+    } else {
+      groupBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (window.GroupDialog) window.GroupDialog.open(room.name);
+      });
+    }
     li.appendChild(groupBtn);
 
     const main = document.createElement('div');
@@ -1027,6 +1049,21 @@ const SonosView = (() => {
     shuffleBtn.disabled = !shuffleAvailable;
     shuffleBtn.classList.toggle('is-disabled', !shuffleAvailable);
     shuffleBtn.title = shuffleAvailable ? 'Shuffle' : 'Shuffle unavailable on streams';
+
+    // Repeat rides the same play-mode string, so it's available exactly
+    // where shuffle is (queue-backed playback, playlists included).
+    if (repeatBtn) {
+      const mode = (track && track.repeatMode) || 'off';
+      repeatBtn.classList.toggle('is-active', mode !== 'off');
+      repeatBtn.setAttribute('aria-pressed', String(mode !== 'off'));
+      repeatBtn.disabled = !shuffleAvailable;
+      repeatBtn.classList.toggle('is-disabled', !shuffleAvailable);
+      repeatBtn.title = shuffleAvailable
+        ? (mode === 'one' ? 'Repeat: this track' : mode === 'all' ? 'Repeat: whole queue' : 'Repeat: off')
+        : 'Repeat unavailable on streams';
+      if (repeatDot) repeatDot.style.display = mode === 'all' ? '' : 'none';
+      if (repeatOneEl) repeatOneEl.style.display = mode === 'one' ? '' : 'none';
+    }
 
     const crossfadeOn = !!(track && track.crossfadeOn);
     crossfadeBtn.classList.toggle('is-active', crossfadeOn);

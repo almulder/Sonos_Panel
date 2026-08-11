@@ -278,6 +278,7 @@ function init(options) {
       CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
       CREATE INDEX IF NOT EXISTS idx_tracks_composer ON tracks(composer);
       CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
+      CREATE INDEX IF NOT EXISTS idx_tracks_mtime ON tracks(mtime_ms);
       CREATE TABLE IF NOT EXISTS incompatible (
         path TEXT PRIMARY KEY,
         reason TEXT,
@@ -454,11 +455,20 @@ function extFromPictureFormat(format) {
 
 // Returns the cache filename for this directory's embedded cover,
 // writing it from `picture` if not already cached. Null on failure.
-function ensureEmbeddedArtCached(dirRel, picture) {
+function ensureEmbeddedArtCached(dirRel, picture, forceWrite) {
   const hash = artCacheNameFor(dirRel);
   const cacheDir = path.join(DATA_DIR, ART_CACHE_DIRNAME);
-  for (const ext of ART_EXTS) {
-    if (fs.existsSync(path.join(cacheDir, `${hash}.${ext}`))) return `${hash}.${ext}`;
+  if (!forceWrite) {
+    for (const ext of ART_EXTS) {
+      if (fs.existsSync(path.join(cacheDir, `${hash}.${ext}`))) return `${hash}.${ext}`;
+    }
+  } else {
+    // A changed file is being re-parsed: its embedded cover is the
+    // current truth, so overwrite (and clear other-extension variants)
+    // rather than serving whatever was extracted before the retag.
+    for (const ext of ART_EXTS) {
+      try { fs.unlinkSync(path.join(cacheDir, `${hash}.${ext}`)); } catch (err) { /* absent */ }
+    }
   }
   if (!picture || !picture.data || picture.data.length === 0) return null;
   const file = `${hash}.${extFromPictureFormat(picture.format)}`;
@@ -481,7 +491,9 @@ function resolveArtInline(rel, common) {
   if (folderArt) return `f:${folderArt}`;
   const pics = (common && common.picture) || [];
   if (pics.length > 0) {
-    const cached = ensureEmbeddedArtCached(dir, pics[0]);
+    // forceWrite: this only runs for NEW or CHANGED files, so the
+    // freshly parsed picture wins over any previously cached one.
+    const cached = ensureEmbeddedArtCached(dir, pics[0], true);
     if (cached) return `e:${cached}`;
   }
   return '';
@@ -562,62 +574,72 @@ async function processFile(rel, generation, mm) {
 }
 
 // ---------------------------------------------------------------------
-// Art pass -- runs after every scan and resolves artwork for rows the
-// normal scan didn't touch. Two populations:
-//   NULL art  = rows from before the art column existed (the in-place
-//               migration). Fully resolved WITHOUT re-reading audio:
-//               folder image check per directory, and for directories
-//               with no folder image but a track flagged embedded_art,
-//               ONE representative file is parsed to extract the cover.
-//   ''  art   = previously checked and found nothing. Gets the cheap
-//               folder-image recheck each scan (so dropping a
-//               cover.jpg into a folder later is picked up), but no
-//               repeated parse attempts.
+// Art pass -- runs after every scan and keeps EVERY track's art
+// reference true, not just unresolved ones (v0.10.0: fully
+// self-healing). Per directory, the desired reference is recomputed:
+//   folder image present (fresh lookup -- the cache is cleared each
+//   scan)                                  -> f:<image>
+//   else an extracted cover already cached -> e:<file>  (re-extracted
+//   from a flagged track if the cache file was deleted)
+//   else                                   -> ''
+// This heals the previously documented gaps: a deleted cover.jpg no
+// longer leaves rows pointing at a missing image (they fall back to
+// the embedded extraction or none), a wiped artcache regenerates, and
+// a later-added folder image still upgrades everything. Replacing an
+// EMBEDDED cover is handled upstream: the retag changes the file's
+// mtime, processFile re-parses it, and resolveArtInline force-writes
+// the cache. Cost: one full-table read plus a readdir per music
+// folder per scan -- seconds at 160k tracks / 13k folders.
 // ---------------------------------------------------------------------
 async function resolveArtPass(mm) {
-  const rows = stmts.unresolvedArt.all();
+  const rows = db.prepare('SELECT path, art, embedded_art FROM tracks').all();
   if (rows.length === 0) return null;
   const startMs = Date.now();
-  // Three populations per directory: NULL rows need full resolution;
-  // '' and 'e:' rows only get the cheap folder-image recheck ('' so a
-  // later-added cover.jpg is picked up, 'e:' so a real folder image
-  // outranks an extracted embedded cover, per the f: > e: priority).
-  const dirs = new Map(); // dirRel -> { nullRows, upgradeRows, embeddedSample }
+  const dirs = new Map(); // dirRel -> { rows: [{path, art}], embeddedSample }
   for (const row of rows) {
     const dir = dirOf(row.path);
     let d = dirs.get(dir);
-    if (!d) { d = { nullRows: [], upgradeRows: [], embeddedSample: null }; dirs.set(dir, d); }
-    (row.art === null ? d.nullRows : d.upgradeRows).push(row.path);
-    if (row.art === null && row.embedded_art === 1 && !d.embeddedSample) d.embeddedSample = row.path;
+    if (!d) { d = { rows: [], embeddedSample: null }; dirs.set(dir, d); }
+    d.rows.push(row);
+    if (row.embedded_art === 1 && !d.embeddedSample) d.embeddedSample = row.path;
   }
-  debugLog.info('scanner', `Art pass: resolving artwork for ${rows.length} track(s) across ${dirs.size} folder(s)...`);
-  const counts = { folders: dirs.size, folderImages: 0, embeddedExtracted: 0, none: 0 };
+  const cacheDir = path.join(DATA_DIR, ART_CACHE_DIRNAME);
+  const counts = { folders: dirs.size, folderImages: 0, embedded: 0, extracted: 0, none: 0 };
   const updates = [];
   let processedDirs = 0;
   lastProgressLogMs = Date.now();
   for (const [dir, d] of dirs) {
+    let desired = '';
     const folderArt = localLibrary.findFolderArt(dir);
     if (folderArt) {
+      desired = `f:${folderArt}`;
       counts.folderImages += 1;
-      const art = `f:${folderArt}`;
-      for (const p of d.nullRows) updates.push([art, p]);
-      for (const p of d.upgradeRows) updates.push([art, p]);
-    } else if (d.nullRows.length > 0) {
-      // Full resolution needed (legacy rows): try one representative
-      // embedded cover; '' if the directory truly has nothing.
-      let art = '';
-      if (d.embeddedSample) {
+    } else {
+      const hash = artCacheNameFor(dir);
+      let cachedFile = null;
+      for (const ext of ART_EXTS) {
+        if (fs.existsSync(path.join(cacheDir, `${hash}.${ext}`))) { cachedFile = `${hash}.${ext}`; break; }
+      }
+      if (!cachedFile && d.embeddedSample) {
         try {
           const meta = await mm.parseFile(path.join(path.resolve(localLibrary.MUSIC_DIR), d.embeddedSample));
           const pics = (meta.common && meta.common.picture) || [];
-          const cached = pics.length > 0 ? ensureEmbeddedArtCached(dir, pics[0]) : null;
-          if (cached) { art = `e:${cached}`; counts.embeddedExtracted += 1; }
-        } catch (err) { /* leave '' */ }
+          if (pics.length > 0) {
+            cachedFile = ensureEmbeddedArtCached(dir, pics[0], false);
+            if (cachedFile) counts.extracted += 1;
+          }
+        } catch (err) { /* leave without art */ }
       }
-      if (!art) counts.none += 1;
-      for (const p of d.nullRows) updates.push([art, p]);
+      if (cachedFile) {
+        desired = `e:${cachedFile}`;
+        counts.embedded += 1;
+      } else {
+        counts.none += 1;
+      }
     }
-    // upgrade-only dirs ('' / 'e:') with no folder image: leave as-is.
+    for (const row of d.rows) {
+      if (row.art !== desired) updates.push([desired, row.path]);
+    }
     processedDirs += 1;
     if (Date.now() - lastProgressLogMs >= PROGRESS_LOG_INTERVAL_MS) {
       lastProgressLogMs = Date.now();
@@ -627,7 +649,9 @@ async function resolveArtPass(mm) {
   const apply = db.transaction((batch) => { for (const [art, p] of batch) stmts.setArt.run(art, p); });
   for (let i = 0; i < updates.length; i += 2000) apply(updates.slice(i, i + 2000));
   const summary = { ...counts, updatedRows: updates.length, durationSeconds: Math.round((Date.now() - startMs) / 1000) };
-  debugLog.info('scanner', `Art pass complete in ${summary.durationSeconds}s: ${counts.folderImages} folder image(s), ${counts.embeddedExtracted} embedded cover(s) extracted, ${counts.none} folder(s) without art.`);
+  if (updates.length > 0 || counts.extracted > 0) {
+    debugLog.info('scanner', `Art pass complete in ${summary.durationSeconds}s: ${counts.folderImages} folder image(s), ${counts.embedded} embedded (${counts.extracted} newly extracted), ${counts.none} without art, ${updates.length} row(s) corrected.`);
+  }
   return summary;
 }
 

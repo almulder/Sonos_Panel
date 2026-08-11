@@ -463,6 +463,14 @@ app.post('/api/sonos/room/:room/playmode', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Repeat cycle: off -> all -> one. Rides the same play-mode string as
+// shuffle, so it's available exactly where shuffle is (queue-backed
+// playback, which includes playlists).
+app.post('/api/sonos/room/:room/repeat', asyncHandler(async (req, res) => {
+  await sonos.setRepeat(req.params.room, req.body.mode);
+  res.json({ ok: true });
+}));
+
 app.post('/api/sonos/room/:room/shuffle', asyncHandler(async (req, res) => {
   await sonos.setShuffle(req.params.room, req.body.enabled);
   res.json({ ok: true });

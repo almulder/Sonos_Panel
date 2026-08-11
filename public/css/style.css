@@ -912,6 +912,7 @@ button {
 }
 
 .progress__shuffle,
+.progress__repeat,
 .progress__crossfade {
   position: relative;
   width: 34px;
@@ -950,16 +951,19 @@ button {
 
 /* Disabled (shuffle only, e.g. on a stream/favorite) -- almost black,
    barely visible against the dark background. */
-.progress__shuffle.is-disabled .progress__icon {
+.progress__shuffle.is-disabled,
+.progress__repeat.is-disabled .progress__icon {
   background-color: #262626;
 }
-.progress__shuffle.is-disabled {
+.progress__shuffle.is-disabled,
+.progress__repeat.is-disabled {
   pointer-events: none;
 }
 
 /* Active (both shuffle and crossfade) -- white icon, white dot
    underneath, matching how Sonos's own app indicates these. */
-.progress__shuffle.is-active .progress__icon,
+.progress__shuffle.is-active,
+.progress__repeat.is-active .progress__icon,
 .progress__crossfade.is-active .progress__icon {
   background-color: #ffffff;
 }
@@ -975,7 +979,8 @@ button {
   background: transparent;
   transition: background-color 0.15s ease;
 }
-.progress__shuffle.is-active .progress__dot,
+.progress__shuffle.is-active,
+.progress__repeat.is-active .progress__dot,
 .progress__crossfade.is-active .progress__dot {
   background: #ffffff;
 }
@@ -1416,7 +1421,6 @@ button {
   font-size: 10px;
   letter-spacing: 0.06em;
   color: var(--text-dim);
-  text-transform: uppercase;
 }
 
 .sourcepanel__chevron {
@@ -1950,3 +1954,45 @@ button:focus-visible,
 .sonostop--stage .transport {
   margin-right: 0;
 }
+
+
+/* ---------------- Repeat button (v0.10.0) ---------------- */
+.progress__icon--repeat {
+  -webkit-mask-image: url('../icons/icon-repeat.svg');
+  mask-image: url('../icons/icon-repeat.svg');
+}
+.progress__repeatone {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-family: var(--font-label);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--amber);
+  line-height: 1;
+}
+
+/* Sleep list: visible thin scrollbar so small screens read as scrollable */
+.sleepmenu__list {
+  scrollbar-width: thin;
+}
+.sleepmenu__list::-webkit-scrollbar { width: 6px; }
+.sleepmenu__list::-webkit-scrollbar-thumb { background: var(--divider); border-radius: 3px; }
+
+/* Disconnected rooms: grouping is pointless until they're back */
+.roomrow__groupbtn:disabled { cursor: default; }
+.roomrow__groupbtn:disabled .roomrow__groupicon { opacity: 0.25; }
+
+/* Queue drag reorder */
+.queuepanel__grip {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--text-dim);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  font-size: 15px;
+  letter-spacing: -2px;
+}
+.queuepanel__item.is-dragging { opacity: 0.45; }
+.queuepanel__item.is-drop-target { box-shadow: inset 0 2px 0 var(--amber); }

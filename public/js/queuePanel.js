@@ -123,7 +123,19 @@ const QueuePanel = (() => {
   function rowEl(item, trackNo) {
     const li = document.createElement('li');
     li.className = 'queuepanel__item';
+    li.dataset.trackNo = String(trackNo);
     if (state && trackNo === state.currentTrackNo) li.classList.add('is-current');
+
+    // Drag handle -- pointer-based so it works on the wall tablets.
+    // Drop ABOVE a row inserts before it (the inset highlight marks
+    // the landing line); the up/down arrows remain as the precise
+    // fallback.
+    const grip = document.createElement('span');
+    grip.className = 'queuepanel__grip';
+    grip.textContent = '\u2016';
+    grip.setAttribute('aria-label', 'Drag to reorder');
+    grip.addEventListener('pointerdown', (e) => beginDrag(e, li, trackNo));
+    li.appendChild(grip);
 
     const art = document.createElement('div');
     art.className = 'queuepanel__art';
@@ -214,7 +226,17 @@ const QueuePanel = (() => {
 
   async function refresh() {
     if (!room) return;
-    state = await qapi(roomPath('/queue'));
+    // Extent-preserving: a live-event refresh keeps as many pages
+    // loaded as the user had expanded to via Load More, instead of
+    // collapsing back to the first 200.
+    const keep = state && state.items ? Math.max(200, state.items.length) : 200;
+    let next = await qapi(roomPath('/queue'));
+    while (!next.error && next.items && next.items.length < Math.min(keep, next.total)) {
+      const more = await qapi(roomPath(`/queue?start=${next.items.length}`));
+      if (more.error || !more.items || more.items.length === 0) break;
+      next.items = next.items.concat(more.items);
+    }
+    state = next;
     if (titleEl) {
       const where = state && state.coordinator && state.coordinator !== room
         ? `${titleCase(room)} (Group: ${titleCase(state.coordinator)})`
@@ -232,6 +254,57 @@ const QueuePanel = (() => {
   // Kept for compatibility with anything still calling open()/close().
   function open() { activateQueueTab(); }
   function close() { activateSourcesTab(); }
+
+  // ---------------- Drag reorder ----------------
+  let dragState = null; // { fromTrackNo, li, hoverLi, hoverTrackNo }
+
+  function clearDragVisuals() {
+    if (!dragState) return;
+    dragState.li.classList.remove('is-dragging');
+    if (dragState.hoverLi) dragState.hoverLi.classList.remove('is-drop-target');
+  }
+
+  function beginDrag(e, li, trackNo) {
+    e.preventDefault();
+    e.stopPropagation();
+    dragState = { fromTrackNo: trackNo, li, hoverLi: null, hoverTrackNo: null };
+    li.classList.add('is-dragging');
+    const onMove = (ev) => {
+      if (!dragState) return;
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const target = el && el.closest ? el.closest('.queuepanel__item') : null;
+      if (dragState.hoverLi && dragState.hoverLi !== target) {
+        dragState.hoverLi.classList.remove('is-drop-target');
+        dragState.hoverLi = null;
+        dragState.hoverTrackNo = null;
+      }
+      if (target && target !== dragState.li) {
+        dragState.hoverLi = target;
+        dragState.hoverTrackNo = parseInt(target.dataset.trackNo, 10) || null;
+        target.classList.add('is-drop-target');
+      }
+    };
+    const onUp = async () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      const drop = dragState && dragState.hoverTrackNo;
+      const from = dragState && dragState.fromTrackNo;
+      clearDragVisuals();
+      dragState = null;
+      // insertBefore uses original (pre-removal) indexing, same as the
+      // arrows; dropping onto yourself or the row right below you is a
+      // no-op.
+      if (drop && from && drop !== from && drop !== from + 1) {
+        await qapi(roomPath('/queue/move'), {
+          method: 'POST',
+          body: JSON.stringify({ from, insertBefore: drop })
+        });
+        await refresh();
+      }
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  }
 
   // Debounced external refresh -- queue events can arrive in bursts
   // (one per track during an album add).
