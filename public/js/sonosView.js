@@ -147,6 +147,11 @@ const SonosView = (() => {
   const titleEl = document.getElementById('sonosTitle');
   const artistEl = document.getElementById('sonosArtist');
   const groupLabelEl = document.getElementById('sonosGroupLabel');
+  const upNextEl = document.getElementById('sonosUpNext');
+
+  function titleCase(str) {
+    return String(str || '').replace(/\S+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1));
+  }
   const sourceLineEl = document.getElementById('sonosSourceLine');
   const artEl = document.getElementById('sonosArt');
   const playPauseBtn = document.getElementById('sonosPlayPause');
@@ -962,7 +967,18 @@ const SonosView = (() => {
     const track = await api(`/api/sonos/nowplaying/${encodeURIComponent(focusedRoom)}`);
     lastNowPlayingTrack = track;
     const members = getMembersOf(focusedRoom);
-    groupLabelEl.textContent = focusedRoom.toUpperCase() + (members.length > 0 ? ` +${members.length}` : '');
+    groupLabelEl.textContent = titleCase(focusedRoom) + (members.length > 0 ? ` +${members.length}` : '');
+    // "Up Next" only exists for queue-backed playback (playlists,
+    // local albums, anything driving the queue) -- hidden otherwise.
+    if (upNextEl) {
+      if (track && track.nextTrack && track.nextTrack.title) {
+        const n = track.nextTrack;
+        upNextEl.textContent = `Up Next: ${n.artist ? `${n.artist} - ` : ''}${n.title}`;
+        upNextEl.style.display = '';
+      } else {
+        upNextEl.style.display = 'none';
+      }
+    }
     if (track && track.title) {
       // Normal song/track playing -- small source line above, big title below.
       if (track.sourceLine) {

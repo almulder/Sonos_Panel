@@ -1215,6 +1215,28 @@ async function getNowPlaying(roomName) {
       }
     }
 
+    // "Up Next" for queue-backed playback (which is exactly what
+    // shuffleAvailable now means: a playlist/local-album context or a
+    // confirmed x-rincon-queue transport). Current track number plus a
+    // one-item browse of Q:0 at that 0-based offset IS the following
+    // track -- and since S2 physically reorders Q:0 when shuffle is on
+    // (hardware-observed), it's the real next in shuffle mode too. At
+    // the last track (or radio/direct playback) there's simply no line.
+    let nextTrack = null;
+    if (shuffleAvailable) {
+      try {
+        const coordName = coordinatorNameFor(roomName);
+        const pos = await device.avTransportService().GetPositionInfo();
+        const trackNo = parseInt(pos.Track, 10) || 0;
+        if (trackNo > 0) {
+          const { items } = await browseContainerPaged(coordName, 'Q:0', trackNo, 1);
+          if (items && items[0] && items[0].title) {
+            nextTrack = { title: items[0].title, artist: items[0].artist || '' };
+          }
+        }
+      } catch (err) { /* no next line, no drama */ }
+    }
+
     return {
       title: track.title || '',
       artist: lineInDeviceName || track.artist || '',
@@ -1227,6 +1249,7 @@ async function getNowPlaying(roomName) {
       playMode,
       shuffleOn,
       shuffleAvailable,
+      nextTrack,
       crossfadeOn,
       sleepTimerRemainingSeconds,
       sourceLine

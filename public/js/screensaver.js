@@ -60,7 +60,11 @@ const Screensaver = (() => {
       titleEl.textContent = content.title || '';
       artistEl.textContent = content.artist || '';
       if (content.art) {
-        artEl.style.backgroundImage = `url(${content.art})`;
+        // Quoted on purpose: album folders like "The Wall (1979)" put
+        // unescaped parentheses in the art URL, and an unquoted CSS
+        // url(...) terminates at the first ')' -- which rendered every
+        // parenthesized album's screensaver art as an empty grey square.
+        artEl.style.backgroundImage = `url("${content.art}")`;
         artEl.style.display = '';
       } else {
         artEl.style.backgroundImage = '';

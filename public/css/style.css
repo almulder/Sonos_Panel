@@ -1925,3 +1925,28 @@ button:focus-visible,
   color: #14181a;
   font-weight: 700;
 }
+
+
+/* ---------------- "Up Next" line under the progress bar ---------------- */
+.nowplaying__upnext {
+  margin: 6px 0 0;
+  text-align: center;
+  font-family: var(--font-label);
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Fullscreen: a touch larger than the room label (eyebrow inherits its
+   11px base in stage mode). */
+.sonostop--stage .nowplaying__upnext {
+  font-size: 15px;
+  margin-top: 10px;
+}
+/* The v0.7.7 corner-column clearance was shoving prev/play/next left of
+   the artwork's center in fullscreen, where the corner buttons don't
+   even exist (the stage template hides them). */
+.sonostop--stage .transport {
+  margin-right: 0;
+}
