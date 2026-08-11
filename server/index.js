@@ -301,6 +301,18 @@ app.post('/api/sonos/room/:room/ungroup', asyncHandler(async (req, res) => {
   res.json({ ok: true, reachable: result.reachable });
 }));
 
+// Exact-membership grouping for the Group Rooms dialog: the clicked
+// room is the coordinator, checked rooms join it, unchecked current
+// members leave -- and rooms in OTHER groups that weren't touched stay
+// exactly where they are (unlike /api/sonos/group's dissolve-overlaps
+// semantics, which suit the saved-group presets).
+app.post('/api/sonos/room/:room/group-members', asyncHandler(async (req, res) => {
+  const members = Array.isArray(req.body.members) ? req.body.members : [];
+  const result = await sonos.setGroupMembers(req.params.room, members);
+  if (broadcastNow) broadcastNow();
+  res.json({ ok: true, ...result });
+}));
+
 // ---------------- Saved group presets ----------------
 // Local equivalent of the official app's "Saved Groups" -- see the
 // comment above these functions in sonos.js for why this couldn't just

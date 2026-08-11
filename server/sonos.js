@@ -1511,6 +1511,61 @@ function getLastKnownRooms() {
   return sanitizeRoomsForClient([...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name)));
 }
 
+// Sets the EXACT membership of the group anchored on `anchorName` --
+// the Group Rooms dialog's Done action. Unlike groupRooms (whose
+// resolveGroupConflicts dissolves every overlapping group wholesale,
+// correct for the old checkbox flow), this moves ONLY the named rooms:
+// current members absent from `memberNames` are ungrouped one by one,
+// and named rooms join the anchor -- physically pulling a room out of
+// some other group leaves that group's remaining members intact, which
+// is the official-app behavior the dialog mimics. The clicked room is
+// ALWAYS the coordinator, ending the old flow's anchor lottery where
+// the alphabetically-privileged room kept winning the group header.
+async function setGroupMembers(anchorName, memberNames) {
+  const desired = new Set((memberNames || []).filter((n) => n && n !== anchorName));
+  if (usingMock) {
+    mockState.rooms.forEach((r) => {
+      if (r.name === anchorName || desired.has(r.name)) r.coordinator = anchorName;
+      else if (r.coordinator === anchorName) r.coordinator = r.name;
+    });
+    return { added: [...desired], removed: [], failed: [] };
+  }
+  const current = new Set();
+  Object.keys(lastCoordinatorMap).forEach((name) => {
+    if (lastCoordinatorMap[name] === anchorName && name !== anchorName) current.add(name);
+  });
+  const toRemove = [...current].filter((n) => !desired.has(n));
+  const toAdd = [...desired].filter((n) => !current.has(n));
+
+  const removed = [];
+  for (const name of toRemove) {
+    await ungroupRoom(name); // never throws; unreachable rooms handled inside
+    removed.push(name);
+  }
+  const results = await Promise.allSettled(
+    toAdd.map((name) => {
+      const member = findDevice(name);
+      if (!member) return Promise.reject(new Error(`${name} not found`));
+      return guarded(`setGroupMembers(${name} -> ${anchorName})`, () =>
+        withTimeout(member.joinGroup(anchorName), DEVICE_CALL_TIMEOUT_MS, `joinGroup(${name})`));
+    })
+  );
+  const added = [];
+  const failed = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') added.push(toAdd[i]);
+    else {
+      failed.push(toAdd[i]);
+      debugLog.warn('sonos', `setGroupMembers: ${toAdd[i]} did not join -- ${r.reason && r.reason.message}`);
+    }
+  });
+  // Same optimistic-patch strategy as the /group route: reflect intent
+  // now, let the ZonesChanged event confirm reality moments later.
+  removed.forEach((n) => patchCoordinatorOptimistically([n], n));
+  if (added.length > 0) patchCoordinatorOptimistically([anchorName, ...added], anchorName);
+  return { added, removed, failed };
+}
+
 async function ungroupRoom(roomName) {
   noteUngroupIntent(roomName);
   if (usingMock) {
@@ -2454,6 +2509,7 @@ module.exports = {
   addContainerToPlaylist,
   removeTrackFromPlaylist,
   saveQueueAsPlaylist,
+  setGroupMembers,
   getQueue,
   addTracksToQueue,
   addContainerToQueue,

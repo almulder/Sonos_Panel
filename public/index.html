@@ -92,7 +92,7 @@
             <div class="roomlist" id="sonosRoomlist">
               <div class="roomlist__header">
                 <button class="roomlist__back" id="roomlistBackBtn" style="display: none;" aria-label="Back to rooms">&#8592;</button>
-                <p class="roomlist__label" id="roomlistLabel">ROOMS &mdash; check to group</p>
+                <p class="roomlist__label" id="roomlistLabel">Rooms</p>
                 <button class="roomlist__addgroup" id="savedGroupsAddBtn" style="display: none;" aria-label="Save a new group">+</button>
               </div>
               <div class="roomlist__pullindicator" id="roomlistPullIndicator">Refreshing&hellip;</div>
@@ -102,12 +102,12 @@
 
             <div class="sourcepanel" id="sourcePanel">
               <div class="sourcepanel__tabs">
-                <button class="sourcepanel__tab is-active" id="srcTabSources">SOURCES</button>
-                <button class="sourcepanel__tab" id="srcTabQueue">QUEUE</button>
+                <button class="sourcepanel__tab is-active" id="srcTabSources">Sources</button>
+                <button class="sourcepanel__tab" id="srcTabQueue">Queue</button>
               </div>
               <div class="sourcepanel__header">
                 <button class="sourcepanel__back" id="sourceBackBtn" aria-label="Back">&#8592;</button>
-                <p class="sourcepanel__title" id="sourcePanelTitle">SELECT A MUSIC SOURCE</p>
+                <p class="sourcepanel__title" id="sourcePanelTitle">Select a Music Source</p>
               </div>
               <div class="sourcepanel__search" id="sourceSearchWrap" style="display: none;">
                 <input type="search" class="sourcepanel__searchinput" id="sourceSearchInput" placeholder="Search" autocomplete="off" />
@@ -115,7 +115,7 @@
               </div>
               <ul class="sourcepanel__items" id="sourcePanelItems"></ul>
               <div class="queueview" id="queueView">
-                <p class="queueview__info" id="queuePanelTitle">UP NEXT</p>
+                <p class="queueview__info" id="queuePanelTitle">Up Next</p>
                 <div class="queuepanel__actions">
                   <button class="queuepanel__actionbtn" id="queueSaveBtn">Save as playlist</button>
                   <button class="queuepanel__actionbtn queuepanel__actionbtn--danger" id="queueClearBtn">Clear queue</button>
@@ -141,6 +141,34 @@
 
   </div>
 
+  <div class="groupdialog" id="groupDialog" style="display: none;">
+    <div class="groupdialog__sheet">
+      <div class="groupdialog__header">
+        <p class="groupdialog__title" id="groupDialogTitle">Group Rooms</p>
+        <button class="groupdialog__close" id="groupDialogClose" aria-label="Close">&#10005;</button>
+      </div>
+      <div class="groupdialog__body">
+        <div class="groupdialog__left">
+          <p class="groupdialog__paneheading">Selected rooms will play:</p>
+          <div class="groupdialog__art" id="groupDialogArt"></div>
+          <p class="groupdialog__track" id="groupDialogTrack"></p>
+          <p class="groupdialog__artist" id="groupDialogArtist"></p>
+        </div>
+        <div class="groupdialog__right">
+          <p class="groupdialog__paneheading">Select rooms to group:</p>
+          <ul class="groupdialog__rooms" id="groupDialogRooms"></ul>
+        </div>
+      </div>
+      <div class="groupdialog__party">
+        <button class="groupdialog__partybtn" id="groupDialogParty">Select All &ndash; Party Mode</button>
+      </div>
+      <div class="groupdialog__footer">
+        <button class="groupdialog__btn groupdialog__btn--primary" id="groupDialogDone">Done</button>
+        <button class="groupdialog__btn" id="groupDialogCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div class="sleepmenu" id="sonosSleepTimerOverlay" style="display: none;">
     <div class="sleepmenu__sheet">
       <p class="sleepmenu__label">SLEEP TIMER</p>
@@ -163,6 +191,7 @@
   <script src="js/tabs.js"></script>
   <script src="js/volumeRail.js"></script>
   <script src="js/progressBar.js"></script>
+  <script src="js/groupDialog.js"></script>
   <script src="js/queuePanel.js"></script>
   <script src="js/sonosView.js"></script>
   <script src="js/screensaver.js"></script>

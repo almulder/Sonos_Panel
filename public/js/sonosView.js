@@ -174,7 +174,6 @@ const SonosView = (() => {
   let lastRoomsJson = '';
   let lastNowPlayingTrack = null; // persisted so the screensaver can read current state without duplicate polling
   let focusedRoom = null;
-  let pendingGroupSelection = new Set(); // top-level rooms checked, building toward a new/merged group
   let expandedCoordinators = new Set(); // coordinators currently showing their members
   let showingGroupsPanel = false; // true = room list is showing saved groups instead of rooms
   let savedGroupsCache = [];
@@ -219,7 +218,7 @@ const SonosView = (() => {
       renderGroupsPanel();
       return;
     }
-    roomlistLabel.textContent = 'ROOMS \u2014 check to group';
+    roomlistLabel.textContent = 'Rooms';
     roomlistBackBtn.style.display = 'none';
     savedGroupsAddBtn.style.display = 'none';
 
@@ -315,16 +314,6 @@ const SonosView = (() => {
     li.className = 'roomrow';
     if (room.name === focusedRoom) li.classList.add('is-focused');
 
-    const checkbox = document.createElement('button');
-    checkbox.className = 'roomrow__checkbox';
-    checkbox.classList.toggle('is-checked', pendingGroupSelection.has(room.name));
-    checkbox.setAttribute('aria-label', `Group ${room.name}`);
-    checkbox.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleGroupSelection(room.name);
-    });
-    li.appendChild(checkbox);
-
     const main = document.createElement('div');
     main.className = 'roomrow__main';
     main.addEventListener('click', async () => {
@@ -375,29 +364,26 @@ const SonosView = (() => {
 
     li.appendChild(main);
     li.appendChild(buildVolumeControl(room));
+
+    const groupBtn = document.createElement('button');
+    groupBtn.className = 'roomrow__groupbtn';
+    groupBtn.setAttribute('aria-label', `Group rooms with ${room.name}`);
+    const groupIcon = document.createElement('img');
+    groupIcon.src = 'icons/group-rooms.png';
+    groupIcon.alt = '';
+    groupIcon.className = 'roomrow__groupicon';
+    groupBtn.appendChild(groupIcon);
+    groupBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (window.GroupDialog) window.GroupDialog.open(room.name);
+    });
+    li.appendChild(groupBtn);
     return li;
   }
 
   function buildMemberRow(room) {
     const li = document.createElement('li');
     li.className = 'roomrow roomrow--member';
-
-    const checkbox = document.createElement('button');
-    checkbox.className = 'roomrow__checkbox is-checked';
-    checkbox.setAttribute('aria-label', `Remove ${room.name} from group`);
-    checkbox.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await api(`/api/sonos/room/${encodeURIComponent(room.name)}/ungroup`, { method: 'POST' });
-      // Deliberately not calling refreshRooms() here -- that makes a
-      // fresh live REST call straight to a Sonos device for current
-      // topology, which can race against Sonos's own join/leave
-      // settling time and come back reporting the OLD topology even
-      // though our server (and the websocket broadcast that already
-      // arrived) already has the correct, current picture. Just
-      // re-render with whatever `rooms` already holds.
-      render();
-    });
-    li.appendChild(checkbox);
 
     const main = document.createElement('div');
     main.className = 'roomrow__main roomrow__main--member';
@@ -425,79 +411,8 @@ const SonosView = (() => {
     render();
   }
 
-  // Picks which selected room should become/stay the group coordinator.
-  // Prefers a room that's ALREADY a coordinator with members (so merging
-  // a standalone room into an existing group doesn't accidentally move
-  // or dissolve that group), and among multiple existing groups, the one
-  // with more members. Falls back to selection order when combining
-  // standalone rooms only.
-  function chooseGroupAnchor(selectedNames) {
-    let best = null;
-    let bestMemberCount = -1;
-    selectedNames.forEach((n) => {
-      const memberCount = getMembersOf(n).length;
-      if (memberCount > bestMemberCount) {
-        best = n;
-        bestMemberCount = memberCount;
-      }
-    });
-    return best || selectedNames[0];
-  }
 
-  // Checking a room that's already in a group means "include that whole
-  // group", not just that one room. Without this, selecting a group's
-  // coordinator plus one new room sends only those two names to the
-  // server -- and since applying a group dissolves any group it
-  // overlaps with (by design, so rooms can't end up in two groups at
-  // once), every other member got dropped and the result collapsed to
-  // exactly two rooms every time. Expanding here keeps that dissolve
-  // behavior correct while letting groups actually grow.
-  function expandSelectionToFullGroups(names) {
-    const expanded = new Set();
-    names.forEach((name) => {
-      expanded.add(name);
-      const room = rooms.find((r) => r.name === name);
-      const coordinator = room ? room.coordinator : name;
-      rooms.forEach((r) => {
-        if (r.coordinator === coordinator) expanded.add(r.name);
-      });
-    });
-    return [...expanded];
-  }
 
-  async function toggleGroupSelection(roomName) {
-    if (pendingGroupSelection.has(roomName)) {
-      pendingGroupSelection.delete(roomName);
-      render();
-      return;
-    }
-    pendingGroupSelection.add(roomName);
-    if (pendingGroupSelection.size >= 2) {
-      const selected = Array.from(pendingGroupSelection);
-      // Anchor is chosen from what was actually CHECKED (which prefers
-      // an existing coordinator), then the full membership is folded in
-      // around it.
-      const anchor = chooseGroupAnchor(selected);
-      const full = expandSelectionToFullGroups(selected);
-      const ordered = [anchor, ...full.filter((n) => n !== anchor)];
-      await api('/api/sonos/group', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rooms: ordered })
-      });
-      pendingGroupSelection.clear();
-      expandedCoordinators.add(anchor);
-      // Deliberately not calling refreshRooms() here -- see the same
-      // reasoning in buildMemberRow's ungroup handler. The websocket
-      // broadcast that fires right after the join (see the optimistic
-      // patch server-side) already updates the shared `rooms` here,
-      // so just re-render with that rather than racing a fresh live
-      // topology fetch against Sonos's own settling time.
-      render();
-    } else {
-      render();
-    }
-  }
 
   async function selectFocusedRoom(roomName) {
     focusedRoom = roomName;
@@ -617,7 +532,7 @@ const SonosView = (() => {
     nameLine.className = 'roomrow__nameline';
     const name = document.createElement('span');
     name.className = 'roomrow__name';
-    name.textContent = 'GROUPS';
+    name.textContent = 'Groups';
     nameLine.appendChild(name);
     const chevron = document.createElement('span');
     chevron.className = 'roomrow__chevron';
@@ -629,7 +544,7 @@ const SonosView = (() => {
   }
 
   function renderGroupsPanel() {
-    roomlistLabel.textContent = 'SAVED GROUPS';
+    roomlistLabel.textContent = 'Saved Groups';
     roomlistBackBtn.style.display = '';
     savedGroupsAddBtn.style.display = '';
     roomListEl.innerHTML = '';
@@ -1268,7 +1183,7 @@ const SonosView = (() => {
     currentGroup = null;
     backStack = [];
     updateBackButtonVisibility();
-    sourcePanelTitle.textContent = 'SELECT A MUSIC SOURCE';
+    sourcePanelTitle.textContent = 'Select a Music Source';
     sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
     const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/source-groups`);
     renderTopLevel(data.groups || []);
@@ -1334,7 +1249,7 @@ const SonosView = (() => {
 
     if (group.isLineInRoot) {
       currentGroup = 'Line-In';
-      sourcePanelTitle.textContent = 'LINE-IN';
+      sourcePanelTitle.textContent = 'Line-In';
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
       const data = await api('/api/sonos/linein-rooms');
       const items = (data.rooms || []).map((r) => ({
@@ -1350,7 +1265,7 @@ const SonosView = (() => {
 
     if (group.isLocalLibraryRoot) {
       currentGroup = 'Local Library';
-      sourcePanelTitle.textContent = 'LOCAL LIBRARY';
+      sourcePanelTitle.textContent = 'Local Library';
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
       const data = await api('/api/local/library-categories');
       renderLibraryCategories(data.categories || [], LOCAL_LIBRARY_GROUP);
@@ -1359,7 +1274,7 @@ const SonosView = (() => {
 
     if (group.isMusicLibraryRoot) {
       currentGroup = 'Music Library';
-      sourcePanelTitle.textContent = 'MUSIC LIBRARY';
+      sourcePanelTitle.textContent = 'Music Library';
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
       const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/music-library`);
       renderLibraryCategories(data.categories || []);
@@ -1368,7 +1283,7 @@ const SonosView = (() => {
 
     if (group.isPlaylistRoot) {
       currentGroup = 'Playlists';
-      sourcePanelTitle.textContent = 'PLAYLISTS';
+      sourcePanelTitle.textContent = 'Playlists';
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
       const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/playlists`);
       renderPlaylistItems(data.items || [], 'No playlists found.');

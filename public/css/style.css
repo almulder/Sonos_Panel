@@ -524,31 +524,7 @@ button {
   background: rgba(255, 255, 255, 0.015);
 }
 
-.roomrow__checkbox {
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  border-radius: 6px;
-  border: 2px solid var(--text-dim);
-  background: transparent;
-  position: relative;
-}
 
-.roomrow__checkbox.is-checked {
-  border-color: var(--amber);
-  background: var(--amber);
-}
-.roomrow__checkbox.is-checked::after {
-  content: '';
-  position: absolute;
-  left: 7px;
-  top: 3px;
-  width: 6px;
-  height: 12px;
-  border-right: 2px solid var(--bg);
-  border-bottom: 2px solid var(--bg);
-  transform: rotate(45deg);
-}
 
 .roomrow__main {
   flex: 0 0 var(--name-col-width, 200px);
@@ -1588,10 +1564,6 @@ button {
    Windows with a real keyboard attached) -- not relevant on the touch
    panel itself but costs nothing to keep. */
 button:focus-visible,
-.roomrow__checkbox:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 
 /* ---------------- Queue panel (v0.7.0) ---------------- */
 .queueactions {
@@ -1769,4 +1741,187 @@ button:focus-visible,
   font-size: 15px;
   flex: 0 0 auto;
   margin-left: 6px;
+}
+
+
+/* ---------------- Group Rooms dialog (v0.8.0) ---------------- */
+.roomrow__groupbtn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.roomrow__groupicon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  opacity: 0.85;
+}
+.roomrow__groupbtn:active .roomrow__groupicon { opacity: 1; }
+
+.groupdialog {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 70;
+}
+.groupdialog__sheet {
+  width: min(600px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-raised);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  overflow: hidden;
+  color: var(--text);
+}
+.groupdialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+.groupdialog__title {
+  margin: 0;
+  font-family: var(--font-label);
+  font-size: 15px;
+}
+.groupdialog__close {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.groupdialog__body {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+  min-height: 0;
+  flex-wrap: wrap;
+}
+.groupdialog__left {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  border-right: 1px solid var(--divider);
+  padding-right: 12px;
+}
+.groupdialog__right {
+  flex: 1.2 1 220px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.groupdialog__paneheading {
+  margin: 0 0 10px;
+  font-family: var(--font-label);
+  font-size: 13px;
+  font-weight: 700;
+}
+.groupdialog__art {
+  width: 120px;
+  height: 120px;
+  border-radius: 8px;
+  background: var(--panel) center/cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+.groupdialog__track {
+  margin: 0;
+  font-size: 14px;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.groupdialog__artist {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.groupdialog__rooms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  max-height: 44vh;
+}
+.groupdialog__roomrow label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.groupdialog__roomrow input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--amber);
+  flex-shrink: 0;
+}
+.groupdialog__loading {
+  list-style: none;
+  padding: 12px 6px;
+  color: var(--text-dim);
+}
+.groupdialog__party {
+  display: flex;
+  justify-content: center;
+  padding: 4px 14px 10px;
+  border-bottom: 1px solid var(--divider);
+}
+.groupdialog__partybtn {
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.groupdialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.groupdialog__btn {
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 22px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.groupdialog__btn--primary {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #14181a;
+  font-weight: 700;
 }

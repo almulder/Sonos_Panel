@@ -33,6 +33,10 @@ const QueuePanel = (() => {
   let actionsPayload = null; // pending Play Now/Next/Add payload
   let refreshTimer = null;
 
+  function titleCase(str) {
+    return String(str || '').replace(/\S+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1));
+  }
+
   async function qapi(path, options) {
     try {
       const res = await fetch(path, {
@@ -82,7 +86,7 @@ const QueuePanel = (() => {
     if (!r) {
       room = null;
       state = null;
-      if (titleEl) titleEl.textContent = 'UP NEXT';
+      if (titleEl) titleEl.textContent = 'Up Next';
       itemsEl.innerHTML = '<li class="queuepanel__empty">Select a room to see its queue</li>';
       return;
     }
@@ -213,14 +217,14 @@ const QueuePanel = (() => {
     state = await qapi(roomPath('/queue'));
     if (titleEl) {
       const where = state && state.coordinator && state.coordinator !== room
-        ? `${room.toUpperCase()} (GROUP: ${state.coordinator.toUpperCase()})`
-        : String(room).toUpperCase();
+        ? `${titleCase(room)} (Group: ${titleCase(state.coordinator)})`
+        : titleCase(room);
       // Hardware-observed on S2: enabling shuffle physically reorders
       // Q:0 into the play order (and disabling restores the original
       // order), so the list below IS the play order. The label marks
       // the mode either way.
-      const shuffleTag = state && state.shuffleOn ? ' \u00b7 SHUFFLE ON' : '';
-      titleEl.textContent = `UP NEXT \u2014 ${where}${shuffleTag}`;
+      const shuffleTag = state && state.shuffleOn ? ' \u00b7 Shuffle On' : '';
+      titleEl.textContent = `Up Next on ${where}${shuffleTag}`;
     }
     render();
   }
