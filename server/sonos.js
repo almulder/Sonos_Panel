@@ -377,10 +377,15 @@ function attachDeviceEventListeners(name, device) {
   });
 
   // Queue service events fire when THIS device's queue changes (adds,
-  // removes, reorders -- from the panel or anyone else's phone). Only
-  // meaningful when the device is a coordinator, but attaching
-  // everywhere is harmless and grouping can change at any time.
-  device.on('Queue', () => {
+  // removes, reorders -- from the panel, anyone else's phone, or the
+  // speaker itself physically reordering Q:0 when shuffle toggles,
+  // which S2 firmware does). Only meaningful when the device is a
+  // coordinator, but attaching everywhere is harmless and grouping can
+  // change at any time. NOTE the event name: the library's parser
+  // emits 'QueueChanged' at device level ('Queue' is only its
+  // global-routing name) -- v0.7.0-0.7.4 listened on 'Queue' and never
+  // heard a single event.
+  device.on('QueueChanged', () => {
     try {
       invalidateContainerCache('Q:0');
       if (queueChangedCallback) queueChangedCallback(name);

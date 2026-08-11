@@ -1171,6 +1171,14 @@ const SonosView = (() => {
       body: JSON.stringify({ enabled: nowOn })
     });
     await refreshNowPlaying();
+    // S2 firmware physically reorders Q:0 when shuffle toggles (and
+    // restores the original order on disable) -- refresh the queue tab
+    // so the new order shows without tabbing away and back. The
+    // QueueChanged event also fires when the speaker finishes the
+    // reorder; the panel's debounce collapses the two into one fetch.
+    if (window.QueuePanel && window.QueuePanel.refreshIfOpen) {
+      window.QueuePanel.refreshIfOpen();
+    }
   });
 
   crossfadeBtn.addEventListener('click', async () => {
