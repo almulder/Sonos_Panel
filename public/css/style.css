@@ -242,6 +242,12 @@ button {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+  /* Clearance from the corner-button column (fullscreen top-right,
+     sleep bottom-right: 36px wide at right:10px = 46px of corner
+     territory). This margin shifts prev/play/next left past it --
+     the one knob to adjust if the spacing wants tuning on a given
+     tablet size. */
+  margin-right: 52px;
 }
 
 .transport__btn {
