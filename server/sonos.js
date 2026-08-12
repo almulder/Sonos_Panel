@@ -1246,7 +1246,7 @@ async function getNowPlaying(roomName) {
       if (!track.album) track.album = localTrack.album || '';
       if (!track.albumArtURL) track.albumArtURL = localTrack.albumArtUrl || null;
       if (!track.duration && localTrack.durationSeconds) track.duration = localTrack.durationSeconds;
-      if (!sourceLine) sourceLine = 'Local Library';
+      if (!sourceLine) sourceLine = 'Network Music Library';
     }
 
     // Positive queue confirmation for playback the panel didn't start
@@ -2554,7 +2554,7 @@ async function getSourceGroups(roomName) {
 
   // Music Library pinned to the very top -- it's the only source here
   // that's genuinely local content rather than a streaming service.
-  groups.unshift({ id: 'musiclibrary', title: 'Music Library', browsable: true, isMusicLibraryRoot: true });
+  groups.unshift({ id: 'musiclibrary', title: 'Sonos Music Library', browsable: true, isMusicLibraryRoot: true });
 
   return groups;
 }

@@ -151,13 +151,13 @@ function buildSourceIcon(group) {
   if (group.isLocalLibraryRoot) {
     // Dedicated icon if the asset exists; falls back to default.png
     // via buildImgIconWithFallback's onerror handler otherwise.
-    return buildImgIconWithFallback('source-locallibrary');
+    return buildImgIconWithFallback('source-networklibrary');
   }
   if (group.isMusicLibraryRoot) {
-    return buildImgIconWithFallback('source-musiclibrary');
+    return buildImgIconWithFallback('source-sonoslibrary');
   }
   if (group.isLineInRoot) {
-    return buildImgIconWithFallback('source-linein');
+    return buildImgIconWithFallback('linein');
   }
   if (group.isPlaylistRoot) {
     return buildImgIconWithFallback('source-playlist');
@@ -1359,8 +1359,8 @@ const SonosView = (() => {
     }
 
     if (group.isLocalLibraryRoot) {
-      currentGroup = 'Local Library';
-      sourcePanelTitle.textContent = 'Local Library';
+      currentGroup = 'Network Music Library';
+      sourcePanelTitle.textContent = 'Network Music Library';
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
       const data = await api('/api/local/library-categories');
       renderLibraryCategories(data.categories || [], LOCAL_LIBRARY_GROUP);
@@ -1368,8 +1368,8 @@ const SonosView = (() => {
     }
 
     if (group.isMusicLibraryRoot) {
-      currentGroup = 'Music Library';
-      sourcePanelTitle.textContent = 'Music Library';
+      currentGroup = 'Sonos Music Library';
+      sourcePanelTitle.textContent = 'Sonos Music Library';
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
       const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/music-library`);
       renderLibraryCategories(data.categories || []);
