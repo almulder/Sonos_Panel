@@ -40,6 +40,13 @@
 //             testing ("can't play due to the sample rate" on a hi-res
 //             FLAC), so it's enforced here.
 
+// S1 systems cap lossless at 16-bit (S2 allows 24-bit FLAC/ALAC); the
+// SONOS_SYSTEM variable (default s2) picks which ceiling the
+// compatibility filter enforces. Files over the limit are listed in
+// incompatible-files.txt and never added -- no auto-conversion here.
+const SONOS_SYSTEM = String(process.env.SONOS_SYSTEM || 's2').toLowerCase() === 's1' ? 's1' : 's2';
+const LOSSLESS_HI_CAP = SONOS_SYSTEM === 's1' ? 16 : 24;
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -119,7 +126,7 @@ function evaluateCompatibility(ext, format) {
     case '.aac':
       // The MP4 family carries either AAC (lossy) or ALAC (lossless) --
       // the codec, not the extension, decides which rule applies.
-      if (codecUpper.includes('ALAC')) return losslessCap(24, 'ALAC');
+      if (codecUpper.includes('ALAC')) return losslessCap(LOSSLESS_HI_CAP, 'ALAC');
       if (codecUpper.includes('AAC') || codec === '') return lossyCap(320, 'AAC');
       return { ok: false, reason: `unsupported codec "${codec}" in ${ext} container` };
     case '.wma':
@@ -135,7 +142,7 @@ function evaluateCompatibility(ext, format) {
       if (codecUpper.includes('VORBIS') || codec === '') return lossyCap(320, 'OGG');
       return { ok: false, reason: `unsupported codec "${codec}" in Ogg container` };
     case '.flac':
-      return losslessCap(24, 'FLAC');
+      return losslessCap(LOSSLESS_HI_CAP, 'FLAC');
     case '.aif':
     case '.aiff':
       return losslessCap(16, 'AIFF');

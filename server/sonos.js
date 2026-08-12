@@ -236,30 +236,32 @@ async function init() {
     const found = await discovery.discoverMultiple({ timeout: DISCOVERY_TIMEOUT_MS });
     if (!found || found.length === 0) throw new Error('No Sonos devices found on network');
 
-    // This app is intentionally S2-only: a mix of legacy "S1" and current
-    // "S2" Sonos hardware on the same network runs as two entirely
-    // separate, non-merging local systems, and here the S1 device is
-    // dedicated to a home alarm system that should never be listed or
-    // touched by this app. Filter S1 devices out via the community-
-    // documented /status/zp SWGen field BEFORE building the room list --
-    // note this defaults to INCLUDING a device if its generation can't be
-    // determined (network hiccup, unexpected response format), since a
-    // silently-missing S2 room is the same class of bug just fixed
-    // elsewhere. If the alarm-system Sonos still shows up after this,
-    // that means detection failed for it specifically -- flag it and the
-    // default can flip to exclude-when-uncertain instead.
-    const s2Seeds = [];
+    // One container controls ONE Sonos generation (v0.15.0, SONOS_SYSTEM
+    // variable, default s2): S1 and S2 hardware on the same LAN run as
+    // two entirely separate, non-merging households, and both answer the
+    // same SSDP search -- so devices of the OTHER generation are filtered
+    // out here via the community-documented /status/zp SWGen field
+    // BEFORE building the room list. To control both generations, run a
+    // second container with SONOS_SYSTEM flipped (separate IP + appdata).
+    // A device whose generation can't be determined (network hiccup,
+    // unexpected response format) is INCLUDED, since a silently-missing
+    // room is the worse failure; if a wrong-generation device slips
+    // through, detection failed for it specifically -- the log line
+    // below tells the story.
+    const wantedGen = SONOS_SYSTEM === 's1' ? 1 : 2;
+    const seeds = [];
     for (const device of found) {
       const gen = await getSoftwareGeneration(device);
-      if (gen === 1) {
-        debugLog.info('sonos', `Excluding S1 device at ${device.host} (SWGen=1) -- treated as non-S2 hardware, not added to room list`);
+      if (gen !== null && gen !== wantedGen) {
+        debugLog.info('sonos', `Excluding S${gen} device at ${device.host} (SWGen=${gen}) -- this container is configured for S${wantedGen} (SONOS_SYSTEM=${SONOS_SYSTEM})`);
         continue;
       }
-      debugLog.info('sonos', `Including device at ${device.host} as S2 seed (SWGen=${gen === null ? 'unknown, defaulting to include' : gen})`);
-      s2Seeds.push(device);
+      debugLog.info('sonos', `Including device at ${device.host} as S${wantedGen} seed (SWGen=${gen === null ? 'unknown, defaulting to include' : gen})`);
+      seeds.push(device);
     }
+    const s2Seeds = seeds; // name kept: downstream code reads this list
 
-    if (s2Seeds.length === 0) throw new Error('No S2 Sonos devices found (only S1 device(s) responded, or generation could not be determined for any)');
+    if (s2Seeds.length === 0) throw new Error(`No S${wantedGen} Sonos devices found (only other-generation device(s) responded, or generation could not be determined for any). Check the SONOS_SYSTEM setting.`);
 
     // Ask EVERY S2 seed for its own topology and merge all of them --
     // still needed for reliability, since which speaker happens to
@@ -507,6 +509,12 @@ function withTimeout(promise, ms, label) {
     })
   ]);
 }
+// Which Sonos generation this container controls: 's2' (default) or
+// 's1'. Affects discovery filtering, the local-library codec limits
+// (see localScanner.js), and Up Next (S1's queue-reorder-under-shuffle
+// behavior is unverified, so the line is suppressed there).
+const SONOS_SYSTEM = String(process.env.SONOS_SYSTEM || 's2').toLowerCase() === 's1' ? 's1' : 's2';
+
 const DEVICE_CALL_TIMEOUT_MS = 3000;
 
 // Dedicated reachability probe -- deliberately does NOT use
@@ -1274,7 +1282,10 @@ async function getNowPlaying(roomName) {
     // (hardware-observed), it's the real next in shuffle mode too. At
     // the last track (or radio/direct playback) there's simply no line.
     let nextTrack = null;
-    if (shuffleAvailable) {
+    // S1 note: this reading of Q:0 position+1 relies on the S2-observed
+    // behavior that shuffle physically reorders the queue; unverified on
+    // S1 firmware, so the Up Next line simply doesn't exist there.
+    if (shuffleAvailable && SONOS_SYSTEM !== 's1') {
       try {
         const coordName = coordinatorNameFor(roomName);
         const pos = await device.avTransportService().GetPositionInfo();

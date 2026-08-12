@@ -188,6 +188,7 @@ app.get('/api/config', (req, res) => {
     version: PKG_VERSION,
     color: THEME_COLOR,
     passcodeEnabled: Boolean(process.env.PASSCODE),
+    sonosSystem: String(process.env.SONOS_SYSTEM || 's2').toLowerCase() === 's1' ? 's1' : 's2',
     screensaverTimeoutMs: SCREENSAVER_TIMEOUT_SECONDS * 1000,
     tabs: buildExtraTabs()
   });
