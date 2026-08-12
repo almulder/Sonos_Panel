@@ -133,6 +133,16 @@ function resolveService(label) {
   for (const k of serviceKeysByLength) {
     if (n.startsWith(k)) return { key: k, display: window.MUSIC_SERVICES[k] };
   }
+  // Reverse prefix: the stream's label can be SHORTER than the
+  // directory key ("80s80s" vs 80s80sradio). Shortest matching key
+  // wins; 4-char minimum keeps tiny labels from grabbing wrong keys.
+  if (n.length >= 4) {
+    let best = null;
+    for (const k of serviceKeysByLength) {
+      if (k.startsWith(n) && (!best || k.length < best.length)) best = k;
+    }
+    if (best) return { key: best, display: window.MUSIC_SERVICES[best] };
+  }
   return null;
 }
 
@@ -1099,6 +1109,7 @@ const SonosView = (() => {
     const crossfadeOn = !!(track && track.crossfadeOn);
     crossfadeBtn.classList.toggle('is-active', crossfadeOn);
     crossfadeBtn.setAttribute('aria-pressed', String(crossfadeOn));
+    crossfadeBtn.title = crossfadeOn ? 'Crossfade: on' : 'Crossfade: off';
   }
 
   function formatSleepTimerBadge(seconds) {

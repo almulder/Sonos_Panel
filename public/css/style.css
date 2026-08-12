@@ -928,8 +928,10 @@ button {
 
 .progress__icon {
   display: block;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
+  -webkit-mask-position: center;
+  mask-position: center;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
   -webkit-mask-size: contain;
@@ -943,6 +945,10 @@ button {
 .progress__icon--shuffle {
   -webkit-mask-image: url('../icons/icon-shuffle.svg');
   mask-image: url('../icons/icon-shuffle.svg');
+  /* This glyph fills its viewBox edge-to-edge; the others carry
+     internal padding -- scaled down to sit visually level. */
+  -webkit-mask-size: 82%;
+  mask-size: 82%;
 }
 .progress__icon--crossfade {
   -webkit-mask-image: url('../icons/icon-crossfade.svg');
@@ -962,7 +968,7 @@ button {
 
 /* Active (both shuffle and crossfade) -- white icon, white dot
    underneath, matching how Sonos's own app indicates these. */
-.progress__shuffle.is-active,
+.progress__shuffle.is-active .progress__icon,
 .progress__repeat.is-active .progress__icon,
 .progress__crossfade.is-active .progress__icon {
   background-color: #ffffff;
@@ -979,7 +985,7 @@ button {
   background: transparent;
   transition: background-color 0.15s ease;
 }
-.progress__shuffle.is-active,
+.progress__shuffle.is-active .progress__dot,
 .progress__repeat.is-active .progress__dot,
 .progress__crossfade.is-active .progress__dot {
   background: #ffffff;
