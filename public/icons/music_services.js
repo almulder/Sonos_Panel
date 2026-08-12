@@ -17,6 +17,7 @@
 const MUSIC_SERVICES = {
   '80erradioharmony': '80er-Radio harmony',
   '80s80sradio': '80s80s Radio',
+  '80s80sreal80sradio': '80s80s Real 80s Radio',
   '90s90sradio': '90s90s Radio',
   'absoluteradio': 'Absolute Radio',
   'accuradio': 'AccuRadio',

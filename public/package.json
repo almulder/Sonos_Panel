@@ -1,0 +1,21 @@
+{
+  "name": "sonos-panel",
+  "version": "0.13.5",
+  "description": "Touchscreen-friendly web app for controlling a whole-house Sonos system, designed to run in Docker and be installed as a PWA on Android/iOS for fullscreen use.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.19.2",
+    "music-metadata": "^7.14.0",
+    "sonos": "^1.14.1",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,2054 @@
+/* ---------------------------------------------------------------------
+   Design tokens
+   Palette is deliberately high-contrast dark: this runs behind a
+   1000-nit outdoor touch panel that needs to read clearly in direct
+   sun, and it's controlled with fingers, not a mouse, so touch targets
+   are large. Amber is the single accent color throughout, like the
+   indicator light on a hardware receiver/amp.
+--------------------------------------------------------------------- */
+:root {
+  --bg: #14171a;
+  --panel: #1e2225;
+  --panel-raised: #262b2f;
+  --divider: #33383c;
+  --text: #edebe6;
+  --text-dim: #8b9098;
+  --amber: #e8a33d;
+  --amber-dim: #6b5228;
+  --danger: #d9534f;
+
+  --accent: var(--amber);
+  --accent-dim: var(--amber-dim);
+
+  --font-label: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --radius: 14px;
+  --touch-min: 56px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ---------------------------------------------------------------------
+   Tab bar
+   A fixed 4-slot grid -- Sonos always occupies the first slot, up to 3
+   extra tabs fill the rest. Every slot is always exactly 25% of the
+   bar's width (flex: 0 0 25%), whether populated or not -- an
+   unconfigured slot renders as blank, non-interactive space rather
+   than letting other tabs stretch to fill the gap. Each tab carries
+   its own --tab-color custom property set inline by tabs.js -- the
+   active tab gets a solid underline/glow in that color, inactive tabs
+   show a dim version so you can still tell them apart before tapping.
+
+   --tab-height is an explicit height (not just a minimum) so the icon
+   (80% of it) and label (60% of it) have a well-defined box to size
+   against -- bumped up from the base touch target size since content
+   at those proportions needs real room, not just the 56px minimum.
+--------------------------------------------------------------------- */
+.tabbar {
+  --tab-height: 40px;
+  display: flex;
+  gap: 8px;
+  padding: 10px 20px 0;
+  flex-shrink: 0;
+}
+
+.tabbar__btn {
+  flex: 0 0 calc(25% - 6px);
+  height: var(--tab-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  appearance: none;
+  border: none;
+  background: var(--panel);
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  letter-spacing: 0.03em;
+  padding: 0 18px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 2px solid var(--tab-color);
+  opacity: 0.55;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease, border-bottom-width 0.15s ease;
+}
+
+.tabbar__btn--empty {
+  background: transparent;
+  border-bottom-color: transparent;
+  pointer-events: none;
+}
+
+.tabbar__icon {
+  font-size: calc(var(--tab-height) * 0.8);
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.tabbar__icon--img {
+  height: calc(var(--tab-height) * 0.8);
+  width: auto;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.tabbar__label {
+  font-size: calc(var(--tab-height) * 0.6);
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabbar__btn.is-active {
+  background: var(--panel-raised);
+  color: var(--text);
+  border-bottom-width: 4px;
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------
+   Body layout: content + persistent volume rail
+--------------------------------------------------------------------- */
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  overflow: hidden;
+}
+
+.view {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.view.is-active {
+  display: flex;
+}
+
+/* Extra tabs (Hubitat, Home Assistant, etc.) -- just a full-size
+   iframe, no other chrome needed since the embedded site provides its
+   own UI. */
+.view--iframe__frame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+/* ---------------------------------------------------------------------
+   Sonos: now-playing card
+--------------------------------------------------------------------- */
+.nowplaying {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  background: var(--panel);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  padding: 18px;
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.nowplaying__art {
+  width: 100px;
+  height: 100px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--amber-dim), var(--panel-raised));
+  flex-shrink: 0;
+}
+
+.nowplaying__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.nowplaying__info {
+  min-width: 0;
+}
+
+.nowplaying__eyebrow {
+  margin: 0 0 4px;
+  font-family: var(--font-label);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--amber);
+}
+
+.nowplaying__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nowplaying__artist {
+  margin: 4px 0 0;
+  color: var(--text-dim);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------
+   Transport controls (shared, colored per-context via CSS var override)
+--------------------------------------------------------------------- */
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  /* Clearance from the corner-button column (fullscreen top-right,
+     sleep bottom-right: 36px wide at right:10px = 46px of corner
+     territory). This margin shifts prev/play/next left past it --
+     the one knob to adjust if the spacing wants tuning on a given
+     tablet size. */
+  margin-right: 52px;
+}
+
+.transport__btn {
+  width: var(--touch-min);
+  height: var(--touch-min);
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: var(--panel-raised);
+  color: var(--text);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.transport__btn--main {
+  width: 68px;
+  height: 68px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 24px;
+  border: none;
+}
+
+/* ---------------------------------------------------------------------
+   Sonos: room list
+--------------------------------------------------------------------- */
+.roomlist {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.roomlist__label {
+  font-family: var(--font-label);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin: 0 4px 10px;
+}
+
+/* ---------------------------------------------------------------------
+   Room list header -- normally just the "ROOMS" label, but switches to
+   a back arrow + "SAVED GROUPS" label + add button when drilled into
+   the groups panel (same list element, different content).
+--------------------------------------------------------------------- */
+.roomlist__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 10px;
+}
+.roomlist__header .roomlist__label {
+  margin: 0;
+  flex: 1;
+}
+.roomlist__back {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.roomlist__addgroup {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px dashed var(--divider);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.roomlist__empty {
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 13px;
+  padding: 20px 8px;
+  text-align: center;
+}
+
+.roomlist__pullindicator {
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 12px;
+  text-align: center;
+  transition: opacity 0.15s ease;
+}
+.roomlist__pullindicator.is-active {
+  height: 24px;
+  opacity: 1;
+}
+
+.roomrow.is-disconnected .roomrow__name {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* The "GROUPS" entry row sits above the normal rooms, same visual
+   weight as a room row so it reads as part of the same list. */
+.roomrow--groups-entry {
+  border-bottom: 1px solid var(--divider);
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+}
+
+.roomrow--group .roomrow__editbtn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+.roomrow--group .roomrow__editbtn:hover,
+.roomrow--group .roomrow__editbtn:focus {
+  color: var(--text);
+}
+
+/* Save/edit-group modal checklist (reuses .roomsettings-overlay/-sheet
+   from the per-room settings sheet for the modal chrome itself) */
+.savegroup-checklist {
+  max-height: 240px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.savegroup-checking {
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
+.savegroup-checkrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  font-family: var(--font-label);
+  font-size: 14px;
+  color: var(--text);
+  border-bottom: 1px solid var(--divider);
+}
+.savegroup-checkrow.is-disconnected {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.savegroup-checkrow input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.savegroup-nameinput {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--divider);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-label);
+  font-size: 14px;
+}
+.savegroup-savebtn {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--amber);
+  color: #14181a;
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 14px;
+}
+.savegroup-deletebtn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: #e0685c;
+  font-family: var(--font-label);
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------------
+   Generic yes/no confirm overlay (currently just used for deleting a
+   saved group)
+--------------------------------------------------------------------- */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.confirm-box {
+  background: var(--panel-raised);
+  border-radius: 14px;
+  padding: 24px;
+  max-width: 320px;
+  width: 90%;
+}
+.confirm-message {
+  color: var(--text);
+  font-family: var(--font-label);
+  font-size: 15px;
+  margin: 0 0 20px;
+  text-align: center;
+}
+.confirm-buttons {
+  display: flex;
+  gap: 10px;
+}
+.confirm-btn {
+  flex: 1;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 14px;
+}
+.confirm-btn--no {
+  background: var(--panel);
+  color: var(--text);
+}
+.confirm-btn--yes {
+  background: #e0685c;
+  color: #14181a;
+}
+
+.roomlist__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  flex: 1;
+}
+
+.roomrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  min-height: var(--touch-min);
+  min-width: 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.roomrow.is-focused {
+  background: var(--panel-raised);
+}
+
+.roomrow--member {
+  padding-left: 52px;
+  border-left: 2px solid var(--amber-dim);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+
+
+.roomrow__main {
+  flex: 0 0 var(--name-col-width, 200px);
+  width: var(--name-col-width, 200px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.roomrow__nameline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.roomrow__name {
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.roomrow--member .roomrow__name {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.roomrow__playing-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 6px 1px var(--amber);
+  flex-shrink: 0;
+}
+
+.roomrow__mute-icon {
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.roomrow__chevron {
+  color: var(--text-dim);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.roomrow__sublabel {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------
+   Per-room volume slider -- lets each speaker be tuned individually
+   (bathroom quieter, living room louder) independent of the main
+   volume rail, which continues to control whichever room is focused.
+--------------------------------------------------------------------- */
+.roomrow__volwrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 100px;
+}
+
+.roomrow {
+  /* Single source of truth for this row's slider thumb color -- both
+     the webkit and moz thumb rules just read this variable. Confirmed
+     working via a diagnostic swap (orange-when-selected showed up
+     correctly) -- the real bug was the track blending into the focused
+     row's background, fixed separately with a border on the track
+     itself. Back to the originally-requested pairing: quiet gray when
+     selected, amber everywhere else.
+  */
+  --slider-thumb-color: var(--amber);
+}
+.roomrow.is-focused {
+  --slider-thumb-color: var(--text-dim);
+}
+
+.roomrow__volslider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-raised);
+  border: 1px solid var(--divider);
+  outline: none;
+}
+.roomrow__volslider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--slider-thumb-color);
+  border: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.roomrow__volslider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--slider-thumb-color);
+  border: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.roomrow__volvalue {
+  font-family: var(--font-label);
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 26px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------
+   Persistent volume rail -- the signature element.
+   Styled like a physical fader: a vertical channel with a glowing fill
+   and a thumb you drag, rather than a generic <input type=range>, so it
+   reads as "hardware" rather than "web form control."
+--------------------------------------------------------------------- */
+.volrail {
+  width: 88px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--divider);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px 0;
+  gap: 14px;
+}
+
+.volrail__mute {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: var(--panel-raised);
+  color: var(--text-dim);
+  font-size: 18px;
+}
+.volrail__mute.is-muted {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.volrail__track {
+  position: relative;
+  flex: 1;
+  width: 14px;
+  background: var(--panel-raised);
+  border-radius: 7px;
+  border: 1px solid var(--divider);
+  touch-action: none;
+}
+
+.volrail__fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 40%;
+  background: var(--accent);
+  border-radius: 7px;
+  box-shadow: 0 0 12px 0 var(--accent);
+  transition: background 0.2s ease;
+}
+
+.volrail__thumb {
+  position: absolute;
+  left: 50%;
+  bottom: 40%;
+  width: 34px;
+  height: 20px;
+  background: var(--text);
+  border-radius: 5px;
+  transform: translate(-50%, 50%);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+
+.volrail__value {
+  font-family: var(--font-label);
+  font-size: 13px;
+  color: var(--text-dim);
+  min-height: 1.2em;
+}
+
+/* (old header debug button rule removed -- see .floatingbar__debug) */
+
+/* ---------------------------------------------------------------------
+   Now-playing card extras: fullscreen + sources buttons
+--------------------------------------------------------------------- */
+.nowplaying {
+  position: relative;
+}
+
+.nowplaying__fullscreen-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: var(--panel-raised);
+  color: var(--text-dim);
+  font-size: 15px;
+}
+
+/* ---------------------------------------------------------------------
+   Top section: three side-by-side panels -- Rooms/Source switcher,
+   now-playing info, and standalone transport controls.
+--------------------------------------------------------------------- */
+.sonostop {
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.nowplaying .transport {
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.transport__btn--big {
+  width: 64px;
+  height: 64px;
+  font-size: 24px;
+}
+.transport__btn--big.transport__btn--main {
+  width: 80px;
+  height: 80px;
+  font-size: 28px;
+}
+
+/* ---------------------------------------------------------------------*/
+
+/* ---------------------------------------------------------------------
+   Fullscreen now-playing mode
+   Hides the switcher deck + room list, enlarges the focused card. The
+   volume rail (outside .content entirely) stays visible and functional
+   the whole time.
+--------------------------------------------------------------------- */
+.app.is-fullscreen .deck,
+.app.is-fullscreen .lowerpanels,
+.app.is-fullscreen .roomlist,
+.app.is-fullscreen .sourcepanel,
+.app.is-fullscreen .tabbar,
+.app.is-fullscreen .nowplaying__fullscreen-btn,
+.app.is-fullscreen .nowplaying__fullscreen-btn--bt {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------
+   "Stage" template -- used when the now-playing card is fullscreen.
+   Anchored near the top on purpose (not vertically centered) -- keeps
+   the transport buttons well clear of the bottom edge on a real
+   touchscreen.
+--------------------------------------------------------------------- */
+.sonostop--stage {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 1;
+  gap: 24px;
+  padding-top: 40px;
+}
+
+.sonostop--stage .nowplaying {
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  flex: none;
+  width: 100%;
+  gap: 28px;
+  border: none;
+  background: transparent;
+}
+
+.sonostop--stage .nowplaying__art {
+  width: min(46vh, 420px);
+  height: min(46vh, 420px);
+}
+
+.sonostop--stage .nowplaying__body {
+  align-items: center;
+}
+
+.sonostop--stage .nowplaying__info {
+  flex: none;
+}
+
+.sonostop--stage .progress {
+  width: min(420px, 80vw);
+}
+
+.sonostop--stage .nowplaying__title {
+  font-size: 34px;
+  white-space: normal;
+}
+
+.sonostop--stage .nowplaying__artist {
+  font-size: 18px;
+}
+
+.sonostop--stage .transport {
+  gap: 24px;
+}
+
+.sonostop--stage .transport__btn {
+  width: 72px;
+  height: 72px;
+  font-size: 26px;
+}
+.sonostop--stage .transport__btn--main {
+  width: 88px;
+  height: 88px;
+  font-size: 30px;
+}
+
+/* ---------------------------------------------------------------------
+   Progress bar (elapsed / track / remaining), shared by both views,
+   with optional repeat/shuffle toggles on the Sonos side.
+--------------------------------------------------------------------- */
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress__time {
+  font-family: var(--font-label);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 34px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.progress__track {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  background: var(--panel-raised);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+
+.progress__mode-btn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: var(--panel-raised);
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.progress__mode-btn.is-active {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+}
+
+.progress__shuffle,
+.progress__repeat,
+.progress__crossfade {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.progress__icon {
+  display: block;
+  width: 28px;
+  height: 28px;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  mask-position: center;
+  /* Default = available, not active: light grey. */
+  background-color: #8a8a8a;
+  transition: background-color 0.15s ease;
+}
+.progress__icon--shuffle {
+  -webkit-mask-image: url('../icons/icon-shuffle.svg');
+  mask-image: url('../icons/icon-shuffle.svg');
+  /* This glyph fills its viewBox edge-to-edge; the others carry
+     internal padding -- scaled down to sit visually level. */
+  -webkit-mask-size: 64%;
+  mask-size: 64%;
+}
+.progress__icon--crossfade {
+  -webkit-mask-image: url('../icons/icon-crossfade.svg');
+  mask-image: url('../icons/icon-crossfade.svg');
+}
+
+/* Disabled (shuffle only, e.g. on a stream/favorite) -- almost black,
+   barely visible against the dark background. */
+.progress__shuffle.is-disabled .progress__icon,
+.progress__repeat.is-disabled .progress__icon {
+  background-color: #262626;
+}
+.progress__shuffle.is-disabled,
+.progress__repeat.is-disabled {
+  pointer-events: none;
+}
+
+/* Active (both shuffle and crossfade) -- white icon, white dot
+   underneath, matching how Sonos's own app indicates these. */
+.progress__shuffle.is-active .progress__icon,
+.progress__repeat.is-active .progress__icon,
+.progress__crossfade.is-active .progress__icon {
+  background-color: #ffffff;
+}
+
+.progress__dot {
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+.progress__shuffle.is-active .progress__dot,
+.progress__repeat.is-active .progress__dot,
+.progress__crossfade.is-active .progress__dot {
+  background: #ffffff;
+}
+
+/* ---------------------------------------------------------------------
+   Sleep timer
+--------------------------------------------------------------------- */
+.sleeptimer {
+  /* Mirrors the fullscreen button's column: identical size and right
+     offset (their centers align vertically), anchored to the opposite
+     corner -- lower and clear of the transport controls. */
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  z-index: 5;
+}
+
+.sleeptimer__btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--panel-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sleeptimer__btn.is-active {
+  box-shadow: 0 0 0 2px var(--amber-dim);
+}
+
+.sleeptimer__icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.sleeptimer__badge {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  background: var(--amber);
+  color: #14181a;
+  font-family: var(--font-label);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 4px;
+  border-radius: 8px;
+  line-height: 1;
+}
+
+/* The duration picker is a fixed overlay (same family as the queue
+   action sheet), NOT a popover anchored to the button -- the old
+   anchored version grew upward inside the now-playing container, got
+   its top clipped, and trapped its scrolling in that corner. */
+.sleepmenu {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 70;
+}
+.sleepmenu__sheet {
+  width: min(240px, 80vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-raised);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  padding: 10px 6px 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.sleepmenu__label {
+  margin: 0 0 6px;
+  padding: 0 10px;
+  font-family: var(--font-label);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+  text-align: center;
+}
+.sleepmenu__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+.sleepmenu__list li button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-label);
+  font-size: 13px;
+}
+.sleepmenu__list li button:hover,
+.sleepmenu__list li button:focus {
+  background: var(--panel);
+}
+
+/* ---------------------------------------------------------------------
+   Per-room EQ/settings icon (roomrow)
+--------------------------------------------------------------------- */
+.roomrow__eqbtn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+}
+.roomrow__eqicon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+/* ---------------------------------------------------------------------
+   Per-room sound settings sheet (bass/treble/loudness)
+--------------------------------------------------------------------- */
+.roomsettings-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 100;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.roomsettings-sheet {
+  width: 100%;
+  max-width: 480px;
+  background: var(--panel-raised);
+  border-radius: 16px 16px 0 0;
+  padding: 20px 24px 32px;
+}
+
+.roomsettings-sheet__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.roomsettings-sheet__title {
+  font-family: var(--font-label);
+  font-size: 16px;
+  color: var(--text);
+  margin: 0;
+}
+.roomsettings-sheet__close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  width: 32px;
+  height: 32px;
+}
+
+.roomsettings-sheet__row {
+  margin: 18px 0;
+}
+.roomsettings-sheet__labelrow {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-family: var(--font-label);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.roomsettings-sheet__value {
+  color: var(--amber);
+}
+.roomsettings-sheet__row input[type="range"] {
+  width: 100%;
+}
+
+.roomsettings-sheet__row--toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.roomsettings-sheet__toggle {
+  min-width: 56px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  border: 1px solid var(--divider);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 12px;
+}
+.roomsettings-sheet__toggle.is-active {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  background: var(--panel);
+}
+
+/* ---------------------------------------------------------------------
+   Source panel: in-line drill-down list (Select a Music Source ->
+   Sonos Favorites -> item), styled to match the room list rather than
+   floating as a popup.
+--------------------------------------------------------------------- */
+.sourcepanel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.lowerpanels {
+  display: flex;
+  gap: 20px;
+  margin-top: 20px;
+  flex: 1;
+  min-height: 0;
+}
+
+.lowerpanels .roomlist,
+.lowerpanels .sourcepanel {
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.lowerpanels .roomlist {
+  border-right: 1px solid var(--divider);
+  padding-right: 20px;
+}
+
+.sourcepanel__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 4px 10px;
+}
+
+.sourcepanel__back {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: var(--panel-raised);
+  color: var(--text-dim);
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.sourcepanel__title {
+  margin: 0;
+  font-family: var(--font-label);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+}
+
+.sourcepanel__addbtn,
+.sourcepanel__removebtn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+}
+.sourcepanel__addbtn {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  font-size: 18px;
+}
+.sourcepanel__deleterow {
+  justify-content: center;
+  color: #e0685c;
+  font-family: var(--font-label);
+  font-size: 13px;
+  text-align: center;
+}
+.playlistpicker__new {
+  color: var(--amber);
+  font-weight: 700;
+}
+.playlistpicker__status {
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 13px;
+  text-align: center;
+  min-height: 18px;
+  margin: 10px 0 0;
+}
+
+.sourcepanel__art--letter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--amber-dim);
+  border-radius: 6px;
+  color: var(--amber);
+  font-family: var(--font-label);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.sourcepanel__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  flex-shrink: 0;
+}
+.sourcepanel__searchinput {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--divider);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-label);
+  font-size: 14px;
+}
+.sourcepanel__searchclear {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.sourcepanel__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+}
+
+.sourcepanel__item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  min-height: var(--touch-min);
+  border-bottom: 1px solid var(--divider);
+}
+
+.sourcepanel__groupheader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 6px;
+  font-family: var(--font-label);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+}
+
+.sourcepanel__item--grouped {
+  padding-left: 30px;
+}
+
+.sourcepanel__icon {
+  width: 32px;
+  text-align: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.sourcepanel__icon--img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.lineinlabel__icon {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  vertical-align: -2px;
+}
+
+.sourcepanel__loadmore {
+  justify-content: center;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 13px;
+  text-align: center;
+}
+
+.sourcepanel__art {
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  background: var(--panel-raised);
+  flex-shrink: 0;
+}
+
+.sourcepanel__labelblock {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sourcepanel__label {
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sourcepanel__servicelabel {
+  font-family: var(--font-label);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.sourcepanel__chevron {
+  color: var(--text-dim);
+  font-size: 18px;
+}
+
+.sourcepanel__loading {
+  padding: 20px 16px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------------
+   Screensaver -- pure black overlay after a period of no interaction.
+   Two content modes, toggled via JS: bouncing album art/title/artist
+   (something's actually playing) or the rings animation (idle/nothing
+   playing), which slowly cycles through a curated palette.
+--------------------------------------------------------------------- */
+.screensaver {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.6s ease;
+}
+.screensaver.is-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.screensaver__bounce {
+  position: absolute;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  width: 320px;
+  /* top/left set by JS each animation frame */
+}
+.screensaver.is-bouncing .screensaver__bounce {
+  display: flex;
+}
+
+.screensaver__art {
+  width: 120px;
+  height: 120px;
+  border-radius: 12px;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--panel);
+  box-shadow: 0 0 40px -10px rgba(0, 0, 0, 0.6);
+}
+.screensaver__title {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.screensaver__artist {
+  margin: 0;
+  font-family: var(--font-label);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.screensaver__rings {
+  display: none;
+  position: absolute;
+  inset: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+}
+.screensaver.is-rings .screensaver__rings {
+  display: flex;
+}
+
+.screensaver__ringsSvg {
+  width: min(50vw, 50vh, 320px);
+  height: min(50vw, 50vh, 320px);
+  overflow: visible;
+}
+.screensaver__ring {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 2;
+  opacity: 0;
+  transform-origin: 120px 120px;
+  animation:
+    screensaver-ripple 3.6s ease-out infinite,
+    screensaver-colorcycle 36s ease-in-out infinite;
+}
+.screensaver__ring--1 { animation-delay: 0s, 0s; }
+.screensaver__ring--2 { animation-delay: 0.5s, 0s; }
+.screensaver__ring--3 { animation-delay: 1s, 0s; }
+.screensaver__ring--4 { animation-delay: 1.5s, 0s; }
+
+@keyframes screensaver-ripple {
+  0% { opacity: 0; transform: scale(0.6); }
+  15% { opacity: 0.9; }
+  100% { opacity: 0; transform: scale(1.15); }
+}
+
+/* Six stops spanning a warm-to-cool range rather than a full hue sweep --
+   each color holds briefly before smoothly transitioning to the next, so
+   it reads as "drifting between a thoughtful set of tones" rather than a
+   rainbow cycle.
+
+   NOTE: these hardcoded values are only the fallback shown before
+   JavaScript runs. public/js/theme.js overwrites this @keyframes rule at
+   runtime with six stops derived from THEME_COLOR (see the server's
+   /api/theme endpoint) -- edit theme.js's applyScreensaverCycle(), not
+   these values, to change the actual behavior users see. */
+@keyframes screensaver-colorcycle {
+  0%, 14% { stroke: #9c3a2a; }
+  17%, 31% { stroke: #c4622f; }
+  34%, 48% { stroke: #b8923a; }
+  51%, 65% { stroke: #1f6b73; }
+  68%, 82% { stroke: #3fa9c9; }
+  85%, 99% { stroke: #25505e; }
+  100% { stroke: #9c3a2a; }
+}
+
+.screensaver__ringsLabel {
+  margin: 0;
+  font-family: var(--font-label);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  min-height: 1em; /* reserve space so an empty label doesn't shift layout */
+}
+
+/* Visible focus for anything reached via keyboard (e.g. debugging on
+   Windows with a real keyboard attached) -- not relevant on the touch
+   panel itself but costs nothing to keep. */
+button:focus-visible,
+
+/* ---------------- Queue panel (v0.7.0) ---------------- */
+.queueactions {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+/* Tabs at the top of the source panel: SOURCES | QUEUE */
+.sourcepanel__tabs {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 4px;
+  flex: 0 0 auto;
+}
+.sourcepanel__tab {
+  flex: 1;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  padding: 7px 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  opacity: 0.65;
+}
+.sourcepanel__tab.is-active {
+  background: rgba(255, 255, 255, 0.12);
+  opacity: 1;
+}
+
+/* Queue tab active: hide the sources chrome, show the queue view */
+.sourcepanel--queue .sourcepanel__header,
+.sourcepanel--queue .sourcepanel__search,
+.sourcepanel--queue .sourcepanel__items { display: none !important; }
+.queueview {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.sourcepanel--queue .queueview { display: flex; }
+.queueview__info {
+  margin: 0;
+  padding: 8px 14px 0;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queueview .queuepanel__items {
+  flex: 1;
+  overflow-y: auto;
+}
+.queuepanel__actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.queuepanel__actionbtn {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: inherit;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.queuepanel__actionbtn--danger { border-color: rgba(255, 90, 90, 0.5); color: #ff8a8a; }
+.queuepanel__items {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 10px;
+  overflow-y: auto;
+}
+.queuepanel__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+}
+.queuepanel__item.is-current { background: rgba(255, 255, 255, 0.09); }
+.queuepanel__art {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1) center/cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+.queuepanel__labels {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+.queuepanel__tracktitle,
+.queuepanel__trackartist {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queuepanel__tracktitle { font-size: 14px; }
+.queuepanel__trackartist { font-size: 12px; opacity: 0.65; }
+.queuepanel__rowbtns { display: flex; gap: 6px; flex: 0 0 auto; }
+.queuepanel__rowbtn {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.queuepanel__empty {
+  list-style: none;
+  padding: 18px 14px;
+  opacity: 0.7;
+  text-align: center;
+}
+.queuepanel__more { cursor: pointer; text-decoration: underline; }
+
+.queueactions { z-index: 70; }
+.queueactions__sheet {
+  width: min(360px, 90vw);
+  background: #101014;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #fff;
+}
+.queueactions__label {
+  margin: 0 0 4px;
+  font-size: 13px;
+  opacity: 0.8;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queueactions__btn {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 15px;
+  cursor: pointer;
+}
+.queueactions__btn--cancel { background: transparent; opacity: 0.7; }
+
+.sourcepanel__queuebtn {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 15px;
+  flex: 0 0 auto;
+  margin-left: 6px;
+}
+
+
+/* ---------------- Group Rooms dialog (v0.8.0) ---------------- */
+.roomrow__groupbtn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.roomrow__groupicon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  opacity: 0.85;
+}
+.roomrow__groupbtn:active .roomrow__groupicon { opacity: 1; }
+
+.groupdialog {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 70;
+}
+.groupdialog__sheet {
+  width: min(600px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-raised);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  overflow: hidden;
+  color: var(--text);
+}
+.groupdialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--divider);
+}
+.groupdialog__title {
+  margin: 0;
+  font-family: var(--font-label);
+  font-size: 15px;
+}
+.groupdialog__close {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.groupdialog__body {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+  min-height: 0;
+  flex-wrap: wrap;
+}
+.groupdialog__left {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  border-right: 1px solid var(--divider);
+  padding-right: 12px;
+}
+.groupdialog__right {
+  flex: 1.2 1 220px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.groupdialog__paneheading {
+  margin: 0 0 10px;
+  font-family: var(--font-label);
+  font-size: 13px;
+  font-weight: 700;
+}
+.groupdialog__art {
+  width: 120px;
+  height: 120px;
+  border-radius: 8px;
+  background: var(--panel) center/cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+.groupdialog__track {
+  margin: 0;
+  font-size: 14px;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.groupdialog__artist {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.groupdialog__rooms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  max-height: 44vh;
+}
+.groupdialog__roomrow label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.groupdialog__roomrow input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--amber);
+  flex-shrink: 0;
+}
+.groupdialog__loading {
+  list-style: none;
+  padding: 12px 6px;
+  color: var(--text-dim);
+}
+.groupdialog__party {
+  display: flex;
+  justify-content: center;
+  padding: 4px 14px 10px;
+  border-bottom: 1px solid var(--divider);
+}
+.groupdialog__partybtn {
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.groupdialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.groupdialog__btn {
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 22px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.groupdialog__btn--primary {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #14181a;
+  font-weight: 700;
+}
+
+
+/* ---------------- "Up Next" line under the progress bar ---------------- */
+.nowplaying__upnext {
+  margin: 6px 0 0;
+  text-align: center;
+  font-family: var(--font-label);
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Fullscreen: a touch larger than the room label (eyebrow inherits its
+   11px base in stage mode). */
+.sonostop--stage .nowplaying__upnext {
+  font-size: 15px;
+  margin-top: 10px;
+}
+/* The v0.7.7 corner-column clearance was shoving prev/play/next left of
+   the artwork's center in fullscreen, where the corner buttons don't
+   even exist (the stage template hides them). */
+.sonostop--stage .transport {
+  margin-right: 0;
+}
+
+
+/* ---------------- Repeat button (v0.10.0) ---------------- */
+.progress__icon--repeat {
+  -webkit-mask-image: url('../icons/icon-repeat.svg');
+  mask-image: url('../icons/icon-repeat.svg');
+}
+.progress__repeatone {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-family: var(--font-label);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--amber);
+  line-height: 1;
+}
+
+/* Sleep list: visible thin scrollbar so small screens read as scrollable */
+.sleepmenu__list {
+  scrollbar-width: thin;
+}
+.sleepmenu__list::-webkit-scrollbar { width: 6px; }
+.sleepmenu__list::-webkit-scrollbar-thumb { background: var(--divider); border-radius: 3px; }
+
+/* Disconnected rooms: grouping is pointless until they're back */
+.roomrow__groupbtn:disabled { cursor: default; }
+.roomrow__groupbtn:disabled .roomrow__groupicon { opacity: 0.25; }
+
+/* Queue drag reorder */
+.queuepanel__grip {
+  flex: 0 0 auto;
+  padding: 0 2px;
+  color: var(--text-dim);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  font-size: 15px;
+  letter-spacing: -2px;
+}
+.queuepanel__item.is-dragging { opacity: 0.45; }
+.queuepanel__item.is-drop-target { box-shadow: inset 0 2px 0 var(--amber); }
+
+
+/* ---------------- Container Play/Shuffle + playlist rename (v0.11.0) ---------------- */
+.sourcepanel__actions {
+  display: flex;
+  gap: 10px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--divider);
+  list-style: none;
+}
+.sourcepanel__actionbtn {
+  border: 1px solid var(--divider);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.sourcepanel__actionbtn--primary {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #14181a;
+  font-weight: 700;
+}
+.sourcepanel__actionbtn:disabled { opacity: 0.5; }
+.sourcepanel__renamerow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.sourcepanel__renameinput {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 10px;
+  font-size: 14px;
+}
+
+
+/* Line-In device rows: the plug emoji is gone; the linein.png icon
+   sits a size up from standard source icons so the device-type rows
+   read clearly. */
+.sourcepanel__imgicon--lineinleaf {
+  width: 34px;
+  height: 34px;
+}
