@@ -1833,6 +1833,8 @@ async function refreshFavoritesCache(roomName) {
   favoritesCache.refreshing = true;
   try {
     const items = await attachAccountInfo(await browseContainer(roomName, 'FV:2'));
+    const rawLabels = [...new Set(items.map((i) => i.serviceLabel).filter(Boolean))];
+    debugLog.info('sonos', `Favorite service labels (raw from Sonos): ${rawLabels.join(' | ') || '(none)'}`);
     favoritesCache = { items, at: Date.now(), refreshing: false };
     return items;
   } catch (err) {

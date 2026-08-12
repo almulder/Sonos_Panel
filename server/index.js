@@ -451,6 +451,13 @@ app.get('/api/sonos/linein-rooms', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/sonos/room/:room/play-item', asyncHandler(async (req, res) => {
+  // Troubleshooting trail: the raw service name Sonos reports for
+  // whatever just played, plus the normalized music_services.js key it
+  // needs. If a source shows the wrong name/icon in the panel, this
+  // line in the Docker log is the answer.
+  const rawLabel = req.body.serviceLabel;
+  const key = String(rawLabel || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  debugLog.info('sonos', `Play source: "${rawLabel || '(no service label)'}" | music_services.js key: "${key}" | uri scheme: ${String(req.body.uri || '').split(':')[0]}`);
   await sonos.playItem(req.params.room, req.body.uri, req.body.metadata);
   triggerSonosFastPoll([req.params.room]);
   res.json({ ok: true });

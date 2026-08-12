@@ -1932,7 +1932,7 @@ const SonosView = (() => {
             await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-item`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ uri: item.uri, metadata: item.metadata })
+              body: JSON.stringify({ uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null })
             });
           }
           await openSourceGroups();
@@ -2114,7 +2114,7 @@ const SonosView = (() => {
           await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-item`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri: item.uri, metadata: item.metadata })
+            body: JSON.stringify({ uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null })
           });
           await openSourceGroups();
           setTimeout(refreshNowPlaying, 800);
