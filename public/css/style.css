@@ -2124,3 +2124,24 @@ button:focus-visible,
 }
 .pinpad__key:active { background: var(--amber); color: #14181a; }
 .pinpad__key--fn { font-size: 15px; color: var(--text-dim); }
+
+
+/* ---------------- Build tag (v0.14.1) ----------------
+   Quiet attribution, lower-left: accent color at half opacity,
+   untouchable (pointer-events none) so it can never intercept a tap,
+   and hidden in fullscreen where the stage stays clean. Overlays and
+   the screensaver all sit above it. */
+.buildtag {
+  position: fixed;
+  left: 10px;
+  bottom: 6px;
+  margin: 0;
+  font-family: var(--font-label);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--amber);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 5;
+}
+.app.is-fullscreen .buildtag { display: none; }

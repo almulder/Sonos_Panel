@@ -20,6 +20,9 @@ const AppConfig = (() => {
     try {
       const res = await fetch('/api/config');
       const data = await res.json();
+      // Quiet attribution + version in the lower-left corner.
+      const buildTag = document.getElementById('buildTag');
+      if (buildTag && data.version) buildTag.textContent = `Created by almulder \u00b7 v${data.version}`;
       cached = {
         color: typeof data.color === 'string' ? data.color : DEFAULTS.color,
         screensaverTimeoutMs: Number(data.screensaverTimeoutMs) || DEFAULTS.screensaverTimeoutMs,
