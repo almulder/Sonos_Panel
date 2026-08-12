@@ -147,6 +147,17 @@
 
   </div>
 
+  <div class="pinpad" id="pinpad" style="display: none;">
+    <div class="pinpad__sheet">
+      <button class="pinpad__close" id="pinpadClose" aria-label="Cancel">&#10005;</button>
+      <p class="pinpad__msg" id="pinpadMsg">Enter passcode</p>
+      <div class="pinpad__dots" id="pinpadDots">
+        <span class="pinpad__dot"></span><span class="pinpad__dot"></span><span class="pinpad__dot"></span><span class="pinpad__dot"></span>
+      </div>
+      <div class="pinpad__keys" id="pinpadKeys"></div>
+    </div>
+  </div>
+
   <div class="groupdialog" id="groupDialog" style="display: none;">
     <div class="groupdialog__sheet">
       <div class="groupdialog__header">
@@ -198,6 +209,7 @@
   <script src="js/volumeRail.js"></script>
   <script src="js/progressBar.js"></script>
   <script src="icons/music_services.js"></script>
+  <script src="js/passcodeLock.js"></script>
   <script src="js/groupDialog.js"></script>
   <script src="js/queuePanel.js"></script>
   <script src="js/sonosView.js"></script>

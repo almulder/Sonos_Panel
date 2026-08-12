@@ -928,8 +928,8 @@ button {
 
 .progress__icon {
   display: block;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   -webkit-mask-position: center;
   mask-position: center;
   -webkit-mask-repeat: no-repeat;
@@ -947,8 +947,8 @@ button {
   mask-image: url('../icons/icon-shuffle.svg');
   /* This glyph fills its viewBox edge-to-edge; the others carry
      internal padding -- scaled down to sit visually level. */
-  -webkit-mask-size: 76%;
-  mask-size: 76%;
+  -webkit-mask-size: 64%;
+  mask-size: 64%;
 }
 .progress__icon--crossfade {
   -webkit-mask-image: url('../icons/icon-crossfade.svg');
@@ -2043,3 +2043,84 @@ button:focus-visible,
   padding: 9px 10px;
   font-size: 14px;
 }
+
+
+/* Line-In device rows: the plug emoji is gone; the linein.png icon
+   sits a size up from standard source icons so the device-type rows
+   read clearly. */
+.sourcepanel__imgicon--lineinleaf {
+  width: 34px;
+  height: 34px;
+}
+
+
+/* ---------------- Passcode keypad (v0.14.0) ---------------- */
+.pinpad {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+}
+.pinpad__sheet {
+  position: relative;
+  background: var(--panel-raised);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius);
+  padding: 22px 26px 26px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.pinpad__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  cursor: pointer;
+}
+.pinpad__msg {
+  margin: 4px 0 12px;
+  font-family: var(--font-label);
+  font-size: 14px;
+  color: var(--text);
+}
+.pinpad__msg.is-error { color: #e05656; }
+.pinpad__dots {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.pinpad__dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--text-dim);
+}
+.pinpad__dot.is-filled {
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.pinpad__keys {
+  display: grid;
+  grid-template-columns: repeat(3, 74px);
+  gap: 10px;
+}
+.pinpad__key {
+  height: 62px;
+  border-radius: 12px;
+  border: 1px solid var(--divider);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 22px;
+  cursor: pointer;
+}
+.pinpad__key:active { background: var(--amber); color: #14181a; }
+.pinpad__key--fn { font-size: 15px; color: var(--text-dim); }

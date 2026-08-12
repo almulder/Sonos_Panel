@@ -357,7 +357,7 @@ const QueuePanel = (() => {
     });
   }
   if (saveBtn) {
-    saveBtn.addEventListener('click', async () => {
+    saveBtn.addEventListener('click', () => window.PasscodeLock.require(async () => {
       const title = window.prompt('Save queue as playlist named:');
       if (!title || !title.trim()) return;
       const result = await qapi(roomPath('/save-queue'), {
@@ -365,7 +365,7 @@ const QueuePanel = (() => {
         body: JSON.stringify({ title: title.trim() })
       });
       window.alert(result.error ? `Couldn't save: ${result.error}` : `Saved "${title.trim()}"`);
-    });
+    }));
   }
   if (actions) {
     actions.addEventListener('click', (e) => { if (e.target === actions) hideActions(); });

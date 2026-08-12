@@ -187,6 +187,7 @@ app.get('/api/config', (req, res) => {
   res.json({
     version: PKG_VERSION,
     color: THEME_COLOR,
+    passcodeEnabled: Boolean(process.env.PASSCODE),
     screensaverTimeoutMs: SCREENSAVER_TIMEOUT_SECONDS * 1000,
     tabs: buildExtraTabs()
   });
@@ -449,6 +450,15 @@ app.get('/api/sonos/linein-rooms', asyncHandler(async (req, res) => {
   const rooms = await sonos.getLineInRooms();
   res.json({ rooms });
 }));
+
+// Passcode verification -- the code lives only in the PASSCODE
+// container variable; wrong attempts answer slowly to blunt guessing.
+app.post('/api/panel/verify-passcode', (req, res) => {
+  const expected = String(process.env.PASSCODE || '');
+  const code = String((req.body && req.body.code) || '');
+  if (!expected || code === expected) return res.json({ ok: true });
+  setTimeout(() => res.json({ ok: false }), 400);
+});
 
 app.post('/api/sonos/room/:room/play-item', asyncHandler(async (req, res) => {
   // Troubleshooting trail: the raw service name Sonos reports for

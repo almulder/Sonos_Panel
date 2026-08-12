@@ -397,7 +397,7 @@ const SonosView = (() => {
     } else {
       groupBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (window.GroupDialog) window.GroupDialog.open(room.name);
+        if (window.GroupDialog) window.PasscodeLock.require(() => window.GroupDialog.open(room.name));
       });
     }
     li.appendChild(groupBtn);
@@ -642,7 +642,7 @@ const SonosView = (() => {
 
       const main = document.createElement('div');
       main.className = 'roomrow__main';
-      main.addEventListener('click', async () => {
+      main.addEventListener('click', () => window.PasscodeLock.require(async () => {
         const result = await api('/api/sonos/group', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -659,7 +659,7 @@ const SonosView = (() => {
           // room's back.
           showRoomUnreachableNotice(result.failed);
         }
-      });
+      }));
       const nameLine = document.createElement('div');
       nameLine.className = 'roomrow__nameline';
       const name = document.createElement('span');
@@ -684,7 +684,7 @@ const SonosView = (() => {
       editBtn.textContent = '\u270E';
       editBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        openGroupModal(group);
+        window.PasscodeLock.require(() => openGroupModal(group));
       });
       li.appendChild(editBtn);
 
@@ -904,7 +904,7 @@ const SonosView = (() => {
     };
   }
 
-  savedGroupsAddBtn.addEventListener('click', () => openGroupModal(null));
+  savedGroupsAddBtn.addEventListener('click', () => window.PasscodeLock.require(() => openGroupModal(null)));
 
 
   // Per-room sound settings sheet (bass/treble/loudness) -- built once
@@ -1656,7 +1656,7 @@ const SonosView = (() => {
     btn.setAttribute('aria-label', `Add ${label} to a playlist`);
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      openPlaylistPicker(label, payload);
+      window.PasscodeLock.require(() => openPlaylistPicker(label, payload));
     });
     return btn;
   }
@@ -1992,6 +1992,7 @@ const SonosView = (() => {
         renameBtn.setAttribute('aria-label', `Rename ${item.title}`);
         renameBtn.addEventListener('click', (e) => {
           e.stopPropagation();
+          window.PasscodeLock.require(() => {
           labelBlock.innerHTML = '';
           li.classList.add('sourcepanel__renamerow');
           const input = document.createElement('input');
@@ -2019,6 +2020,7 @@ const SonosView = (() => {
           labelBlock.appendChild(input);
           labelBlock.appendChild(save);
           input.focus();
+          });
         });
         li.appendChild(renameBtn);
 
@@ -2049,9 +2051,8 @@ const SonosView = (() => {
       }
 
       if (item.isLineInLeaf) {
-        const icon = document.createElement('span');
-        icon.className = 'sourcepanel__icon';
-        icon.textContent = '\u{1F50C}';
+        const icon = buildImgIconWithFallback('linein');
+        icon.classList.add('sourcepanel__imgicon--lineinleaf');
         li.appendChild(icon);
       } else {
         if (item.serviceLabel || item.groupTitle) {
@@ -2130,14 +2131,16 @@ const SonosView = (() => {
         removeBtn.className = 'sourcepanel__removebtn';
         removeBtn.textContent = '\u2715';
         removeBtn.setAttribute('aria-label', `Remove ${item.title} from ${playlistTitle}`);
-        removeBtn.addEventListener('click', async (e) => {
+        removeBtn.addEventListener('click', (e) => {
           e.stopPropagation();
+          window.PasscodeLock.require(async () => {
           removeBtn.textContent = '\u2026';
           await api(`/api/sonos/playlists/${encodeURIComponent(playlistContainerId)}/track/${index}`, { method: 'DELETE' });
           const data = await api(
             `/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(playlistContainerId)}`
           );
           renderLeafItems(data.items || [], 'This playlist is empty.', playlistContainerId, playlistTitle);
+          });
         });
         li.appendChild(removeBtn);
       }
@@ -2154,7 +2157,7 @@ const SonosView = (() => {
     const li = document.createElement('li');
     li.className = 'sourcepanel__item sourcepanel__deleterow';
     li.textContent = `\u270F\uFE0F  Rename "${playlistTitle}"`;
-    li.addEventListener('click', () => {
+    li.addEventListener('click', () => window.PasscodeLock.require(() => {
       // Inline swap: the row becomes an input + Save/Cancel, no overlay.
       li.textContent = '';
       li.classList.add('sourcepanel__renamerow');
@@ -2192,7 +2195,7 @@ const SonosView = (() => {
       li.appendChild(cancel);
       input.focus();
       input.select();
-    });
+    }));
     sourcePanelItems.appendChild(li);
   }
 
@@ -2201,14 +2204,14 @@ const SonosView = (() => {
     const li = document.createElement('li');
     li.className = 'sourcepanel__item sourcepanel__deleterow';
     li.textContent = `\u{1F5D1}\uFE0F  Delete "${playlistTitle}"`;
-    li.addEventListener('click', () => {
+    li.addEventListener('click', () => window.PasscodeLock.require(() => {
       showConfirm(`Delete the playlist "${playlistTitle}"?`, async () => {
         await api(`/api/sonos/playlists/${encodeURIComponent(playlistContainerId)}`, { method: 'DELETE' });
         // Back out to the Playlists list -- what we were looking at no
         // longer exists.
         await openGroup({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true });
       });
-    });
+    }));
     sourcePanelItems.appendChild(li);
   }
 
