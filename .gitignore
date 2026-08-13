@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-error.log
+
+# Runtime data written by the app (lives in the appdata volume in
+# production, but appears here when running locally with DATA_DIR=./data)
+data/library.db
+data/library.db-*
+data/artcache/
+data/incompatible-files.txt
+data/account-names.json
+data/saved-groups.json
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Local env overrides
+.env
+.env.local
