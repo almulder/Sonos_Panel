@@ -159,38 +159,84 @@ This takes a minute or two and prints a lot of text. That's normal.
 
 ### 4. Create the start file
 
-In `C:\Sonos_Panel`, create a new text file named `start-panel.bat`
-containing:
+In `C:\Sonos_Panel`, create a new text file named `start-panel.bat`.
+Copy everything below into it.
+
+If you're updating an existing `start-panel.bat`, **delete everything
+already in the file first.** The last line, `node server\index.js`,
+is what actually starts the panel -- anything pasted below it never
+runs, so a file with that line in the middle will silently ignore
+every setting after it.
+
+Lines starting with `rem` are notes and are ignored -- to switch a
+setting on, delete the `rem ` from the front of its line and fill in
+your value. Everything except the first four lines is optional.
 
 ```bat
 @echo off
+rem ===== Basic settings (leave these as they are unless noted) =====
 set PORT=8080
 set DATA_DIR=C:\Sonos_Panel\data
-set SONOS_SYSTEM=s2
 set TZ=America/Denver
-rem Optional -- point this at your music folder to enable the
-rem Network Music Library, or delete the line if you don't have one:
+rem Use s1 instead of s2 if you have a legacy Sonos system:
+set SONOS_SYSTEM=s2
+
+rem ===== Your music folder (optional) =====
+rem Point this at your music to enable the Network Music Library.
+rem Delete this line entirely if you don't have a music folder.
 set MUSIC_DIR=D:\Music
+
+rem ===== Passcode lock (optional) =====
+rem Any 4 digits. Stops guests deleting playlists or changing groups.
+rem Playback and the queue stay open to everyone.
+rem set PASSCODE=1234
+
+rem ===== Screensaver (optional) =====
+rem Seconds of no touch before the screensaver starts. Default 600.
+rem set SCREENSAVER_TIMEOUT_SECONDS=600
+
+rem ===== Extra tab 2 (optional) =====
+rem Embeds another page on your network as a second tab, such as a
+rem Home Assistant or Hubitat dashboard. Only the URL is required --
+rem the other three lines just change how the tab looks.
+rem set TAB2_URL=http://192.168.1.50:8123
+rem set TAB2_TITLE=Home
+rem set TAB2_COLOR=#41bdf5
+rem set TAB2_ICON=http://192.168.1.50:8123/static/icons/favicon-192x192.png
+
+rem ===== Extra tab 3 (optional) =====
+rem set TAB3_URL=http://192.168.1.60/dashboard
+rem set TAB3_TITLE=Cameras
+rem set TAB3_COLOR=#7ac943
+rem set TAB3_ICON=
+
+rem ===== Extra tab 4 (optional) =====
+rem set TAB4_URL=http://192.168.1.70/hubitat/dashboard/1
+rem set TAB4_TITLE=Lights
+rem set TAB4_COLOR=
+rem set TAB4_ICON=
+
 node server\index.js
 ```
 
-Adjust `MUSIC_DIR` to wherever your music actually lives, set
-`SONOS_SYSTEM` to `s1` if you have a legacy Sonos system, and change
-`TZ` to your timezone.
+Things worth knowing:
 
-To add a passcode, change the screensaver delay, or add extra tabs,
-add more `set` lines here using the names from
-[Settings](#settings) above. For example:
-
-```bat
-set PASSCODE=1234
-set SCREENSAVER_TIMEOUT_SECONDS=300
-set TAB2_TITLE=Home
-set TAB2_URL=http://192.168.1.50:8123
-```
-
-Save the file and restart the panel (close the black window and
-double-click the .bat again) for changes to take effect.
+- **Change `MUSIC_DIR`** to wherever your music actually lives, or
+  delete that line if you don't have a music folder.
+- **Change `TZ`** to your timezone if you're not in Mountain time
+  (for example `America/New_York`, `America/Chicago`,
+  `America/Los_Angeles`, `Europe/London`).
+- **For the extra tabs, the `_URL` line is the only one that
+  matters.** A tab appears as soon as its URL is set, and won't
+  appear at all without it. Title, colour, and icon are optional
+  decoration -- you can leave them commented out.
+- **Don't put spaces around the `=`**, and don't add a trailing
+  space after a value. `set PORT=8080` works; `set PORT = 8080`
+  does not.
+- **`node server\index.js` must be the last line, and appear only
+  once.** It starts the panel; any `set` line below it is ignored.
+- **Changes only take effect on restart.** After editing this file,
+  close the panel's black window and double-click the file again.
 
 ### 5. Start it
 
@@ -255,10 +301,24 @@ can install the "Desktop development with C++" workload from the
 which lets it compile locally, but that's a large download and is
 rarely necessary.
 
-**Music files don't appear.** Check `MUSIC_DIR` points at a real
-folder, and see the format limits below -- files the speakers can't
-play are skipped on purpose and listed in `incompatible-files.txt`
-inside your `DATA_DIR` folder.
+**Music files don't appear.** First check the panel can actually
+read the folder: paste the `MUSIC_DIR` path into File Explorer's
+address bar. If it doesn't open there, it won't work in the panel
+either -- see
+[Where your music can live](#where-your-music-can-live), especially
+if your music is on another computer or a NAS. If the folder does
+open, the files may be over the format limits -- those are skipped on
+purpose and listed with reasons in `incompatible-files.txt` inside
+your `DATA_DIR` folder.
+
+**Music is indexed but won't play through the speakers.** The
+speakers fetch audio from the panel over the network, so they need to
+be able to reach it. Confirm Node.js is allowed through Windows
+Firewall on **Private** networks (step 5), and that the PC and the
+speakers are on the same network. If it still fails, set
+`PUBLIC_BASE_URL` explicitly, for example
+`set PUBLIC_BASE_URL=http://192.168.1.25:8080`, using the PC's own
+LAN address.
 
 
 ## Settings
@@ -279,7 +339,7 @@ name in the first column is the environment variable in both cases.
 | `PORT` | `3000` | Port the panel listens on (the Unraid template uses `80`) |
 | `PUBLIC_BASE_URL` | auto | URL the speakers use to stream from the panel. Auto-detected; only set it if local files won't play |
 | `DATA_DIR` | `./data` | Where the library index, artwork cache, and saved settings live |
-| `TAB2_URL` ... `TAB4_URL` | (blank) | Extra tabs -- see below |
+| `TAB2_URL`, `TAB3_URL`, `TAB4_URL` | (blank) | Each adds an extra tab embedding that URL. Optional `TAB2_TITLE` / `_ICON` / `_COLOR` etc. style them -- see [Extra tabs](#extra-tabs) |
 
 ### The passcode lock
 
@@ -309,25 +369,55 @@ a Hubitat dashboard, a camera view, anything with a URL. This turns a
 single wall tablet into a whole-house control panel instead of just a
 music remote.
 
-Each tab is configured with four variables, where `n` is 2, 3, or 4:
+There are twelve variables in total: four for each of the three tabs,
+named **TAB2_**, **TAB3_**, and **TAB4_** (there is no "Tab 1" -- that
+slot is always Sonos itself).
 
-| Variable | Required | What it does |
+| Variable | Required? | What it does |
 | --- | --- | --- |
-| `TABn_URL` | yes | Full URL of the page to embed. **The tab only appears if this is set** |
-| `TABn_TITLE` | no | Name shown on the tab (defaults to "Tab 2", "Tab 3", "Tab 4") |
-| `TABn_ICON` | no | An emoji, or a full image URL, shown before the title |
-| `TABn_COLOR` | no | Hex colour for the tab's underline, e.g. `#4a9eff` |
+| `TAB2_URL` | **Required** | Full URL of the page to embed. **Tab 2 only appears if this is set** |
+| `TAB2_TITLE` | Optional | Name on the tab. Defaults to "Tab 2" |
+| `TAB2_ICON` | Optional | An emoji, or a full image URL, shown before the title |
+| `TAB2_COLOR` | Optional | Hex colour for the tab's underline, e.g. `#41bdf5` |
+| `TAB3_URL` | **Required** | Full URL to embed. **Tab 3 only appears if this is set** |
+| `TAB3_TITLE` | Optional | Name on the tab. Defaults to "Tab 3" |
+| `TAB3_ICON` | Optional | Emoji or image URL |
+| `TAB3_COLOR` | Optional | Hex colour for the underline |
+| `TAB4_URL` | **Required** | Full URL to embed. **Tab 4 only appears if this is set** |
+| `TAB4_TITLE` | Optional | Name on the tab. Defaults to "Tab 4" |
+| `TAB4_ICON` | Optional | Emoji or image URL |
+| `TAB4_COLOR` | Optional | Hex colour for the underline |
 
-A complete example, adding a Home Assistant tab and a camera tab:
+**The URL is the only one that matters.** Set just `TAB2_URL` and you
+get a working tab called "Tab 2" in the default colour with no icon.
+The other three fields are pure decoration -- fill in the ones you
+care about and leave the rest blank. You do not need to populate all
+four fields for a tab to work.
+
+Tabs also don't have to be used in order. Configuring only `TAB3_URL`
+works fine, and leaving `TAB2_URL` blank simply means one fewer tab.
+
+#### Example: one tab
 
 ```bat
 set TAB2_TITLE=Home
 set TAB2_URL=http://192.168.1.50:8123
-set TAB2_ICON=https://192.168.1.50:8123/static/icons/favicon-192x192.png
+```
+
+#### Example: three tabs, with decoration
+
+```bat
+set TAB2_TITLE=Home
+set TAB2_URL=http://192.168.1.50:8123
 set TAB2_COLOR=#41bdf5
+set TAB2_ICON=https://192.168.1.50:8123/static/icons/favicon-192x192.png
 
 set TAB3_TITLE=Cameras
 set TAB3_URL=http://192.168.1.60/dashboard
+set TAB3_COLOR=#7ac943
+
+set TAB4_TITLE=Lights
+set TAB4_URL=http://192.168.1.70/hubitat/dashboard/1
 ```
 
 A single emoji works as an icon too, and is the easiest option in the
@@ -335,14 +425,33 @@ Unraid template fields. In a Windows `.bat` file, though, emoji often
 get mangled by the console's character encoding -- use an image URL
 there instead, as above.
 
-On Unraid, enter those same values in the **Tab 2 Title / Tab 2 URL /
-Tab 2 Icon / Tab 2 Color** template fields (Tab 3 and Tab 4 are under
-"Show more settings"). Numbering doesn't have to be sequential -- you
-can configure Tab 3 alone and leave Tab 2 blank.
+On Unraid, enter these same values in the **Tab 2 Title / Tab 2 URL /
+Tab 2 Icon / Tab 2 Color** template fields. Tab 3 and Tab 4 live under
+**Show more settings** in the container's edit screen.
 
-Note that some sites refuse to be embedded in another page (Google
-and most public websites do this deliberately). Local dashboards such
-as Home Assistant and Hubitat embed fine, which is what this is for.
+#### If a tab doesn't appear
+
+- **Nothing shows up at all.** The tab's `_URL` variable is almost
+  certainly missing or empty -- that's the one field that creates the
+  tab. Check for typos: it's `TAB2_URL`, not `TAB_2_URL` or `TAB2URL`.
+- **You changed a setting and nothing happened.** On Windows, check
+  that `node server\index.js` is the very last line of
+  `start-panel.bat` and appears only once -- settings below it never
+  run. Otherwise: the panel reads these once at startup. On Windows, close the black window and
+  double-click `start-panel.bat` again. On Unraid, hit Apply on the
+  container. Then refresh the browser.
+- **On Unraid, the fields aren't in the container's edit screen.**
+  Variables added to the template don't appear on a container that was
+  created earlier. Remove the container (keeping appdata) and re-add
+  it from the template, or use **Add another Path, Port, Variable**
+  to add the variable by name manually.
+- **The tab appears but the page inside is blank.** The site is
+  refusing to be embedded. Most public websites (Google, and anything
+  with strict security headers) block this deliberately and there's no
+  way around it from this end. Home Assistant does it too by default:
+  the fix is on the Home Assistant side, adding
+  `use_x_frame_options: false` under `http:` in its `configuration.yaml`
+  and restarting it. Hubitat dashboards embed without changes.
 
 
 ## Network Music Library
@@ -352,6 +461,66 @@ local SQLite database and streams them straight to the speakers over
 HTTP -- sidestepping the Sonos music-library index limit entirely.
 Playlists, queueing, artwork, search, and shuffle/repeat all work
 against local files exactly as they do for streaming sources.
+
+### Where your music can live
+
+The panel reads your music files itself and serves them to the
+speakers over HTTP. The speakers never open your files directly, so
+your music folder does **not** need to be shared for Sonos's benefit
+-- but the panel does need to be able to read it.
+
+**Music on the same machine as the panel.** Point `MUSIC_DIR` (or
+Unraid's Music Path) straight at the folder and you're done. No
+sharing, no permissions, nothing else to set up.
+
+```bat
+set MUSIC_DIR=D:\Music
+```
+
+**Music on another computer or a NAS.** The panel can only read it if
+that folder is shared on the network and reachable from the machine
+running the panel. Use the full network path rather than a mapped
+drive letter:
+
+```bat
+set MUSIC_DIR=\\TOWER\Music
+```
+
+Mapped drive letters like `X:\` are tied to your logged-in Windows
+session. They work while you're signed in, but disappear when the
+panel runs as a service or starts at boot before you log in -- the
+library then scans as empty with no obvious explanation. A full
+`\\SERVER\Share` path always works.
+
+On Unraid, mount the remote share on the **host** first (Unassigned
+Devices plugin, giving you `/mnt/remotes/...`) and point Music Path
+there.
+
+#### Sharing a folder on Windows
+
+Do this on the computer that holds the music, not the one running the
+panel:
+
+1. Right-click the music folder and choose **Properties**.
+2. Open the **Sharing** tab and click **Advanced Sharing**.
+3. Tick **Share this folder**. Note the **Share name** -- this
+   becomes part of the path.
+4. Click **Permissions** and make sure **Read** is allowed for the
+   account you'll use (or **Everyone**, if it's a trusted home
+   network).
+5. Click **OK**, then **Apply**.
+6. The Sharing tab now shows the **Network Path**, something like
+   `\\DESKTOP-ABC\Music`. That's what goes in `MUSIC_DIR`.
+
+Then, on the machine running the panel, paste that same path into
+File Explorer's address bar and press Enter. If your music appears,
+the panel can read it too. If Windows asks for credentials, tick
+**Remember my credentials** so the panel isn't blocked later.
+
+If the path doesn't open, check on the machine holding the music that
+its network profile is set to **Private** (not Public), under
+Settings > Network & internet, and that network discovery and file
+sharing are turned on under **Advanced sharing settings**.
 
 ### What each system can play
 
