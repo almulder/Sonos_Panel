@@ -114,21 +114,10 @@ version:
    settings). The panel needs its own LAN address both for SSDP
    discovery/eventing and so speakers can stream Network Music
    Library audio back from it
-3. Optionally set **Music Path** and the other template fields,
-   Apply, then open `http://<the-ip-you-chose>/`
+3. Optionally set **Music Path** and the other template fields (see
+   [Settings](#settings) below for what each one does), Apply, then
+   open `http://<the-ip-you-chose>/`
 
-### Template variables
-
-| Variable | Default | What it does |
-| --- | --- | --- |
-| `SONOS_SYSTEM` | `s2` | Which Sonos generation this container controls: `s2` or `s1`. One per container -- run two containers to cover both |
-| `PASSCODE` | (blank) | Optional 4-digit code enabling the passcode lock. Blank = everything unlocked |
-| Music Path | (blank) | Read-only folder of music files enabling the Network Music Library |
-| `PUBLIC_BASE_URL` | auto | URL speakers use to stream from the panel; auto-detected on br0/host networking |
-| `RESCAN_SCHEDULE` | (blank) | `daily@HH:MM` or `weekly@DAY@HH:MM` library rescans (a quick incremental scan always runs at startup) |
-| `TZ` | America/Denver | Timezone for the rescan schedule |
-| `SCREENSAVER_TIMEOUT_SECONDS` | 600 | Idle time before the screensaver |
-| `TAB2_*` / `TAB3_*` / `TAB4_*` | (blank) | Extra embedded-dashboard tabs (title, color, icon, URL) |
 
 ## Running on Windows (no Docker, no server needed)
 
@@ -186,6 +175,20 @@ Adjust `MUSIC_DIR` to wherever your music actually lives, set
 `SONOS_SYSTEM` to `s1` if you have a legacy Sonos system, and change
 `TZ` to your timezone.
 
+To add a passcode, change the screensaver delay, or add extra tabs,
+add more `set` lines here using the names from
+[Settings](#settings) above. For example:
+
+```bat
+set PASSCODE=1234
+set SCREENSAVER_TIMEOUT_SECONDS=300
+set TAB2_TITLE=Home
+set TAB2_URL=http://192.168.1.50:8123
+```
+
+Save the file and restart the panel (close the black window and
+double-click the .bat again) for changes to take effect.
+
 ### 5. Start it
 
 Double-click `start-panel.bat`. A black window opens and stays open
@@ -233,6 +236,90 @@ higher. If not, reinstall Node.js and reopen Command Prompt.
 folder, and see the format limits below -- files the speakers can't
 play are skipped on purpose and listed in `incompatible-files.txt`
 inside your `DATA_DIR` folder.
+
+
+## Settings
+
+All settings are optional except the music path (and only if you want
+the Network Music Library). On Unraid these are template fields; on
+Windows they are `set NAME=value` lines in `start-panel.bat`. The
+name in the first column is the environment variable in both cases.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `SONOS_SYSTEM` | `s2` | Which Sonos generation this instance controls: `s2` or `s1`. One per instance -- run two to cover both |
+| `MUSIC_DIR` | (blank) | Folder of music files enabling the Network Music Library. On Unraid this is the **Music Path** field, mapped read-only |
+| `PASSCODE` | (blank) | 4-digit code enabling the passcode lock. Blank = everything unlocked |
+| `SCREENSAVER_TIMEOUT_SECONDS` | `600` | Idle seconds before the screensaver starts |
+| `RESCAN_SCHEDULE` | (blank) | `daily@HH:MM` or `weekly@DAY@HH:MM` library rescans (a quick incremental scan always runs at startup) |
+| `TZ` | `America/Denver` | Timezone for the rescan schedule |
+| `PORT` | `3000` | Port the panel listens on (the Unraid template uses `80`) |
+| `PUBLIC_BASE_URL` | auto | URL the speakers use to stream from the panel. Auto-detected; only set it if local files won't play |
+| `DATA_DIR` | `./data` | Where the library index, artwork cache, and saved settings live |
+| `TAB2_URL` ... `TAB4_URL` | (blank) | Extra tabs -- see below |
+
+### The passcode lock
+
+Set `PASSCODE` to any 4 digits and the panel asks for it before
+anything structural: deleting or renaming playlists, adding or
+removing playlist tracks, editing account names, and creating or
+changing room groups. Playback, volume, and the queue stay open, so
+guests can play whatever they like without rearranging your setup. An
+onscreen keypad appears -- no keyboard needed on a tablet. Once
+entered, the panel stays unlocked while it's being used and re-locks
+after 60 seconds of no touches. Leave it blank to disable the lock
+entirely.
+
+### The screensaver
+
+`SCREENSAVER_TIMEOUT_SECONDS` sets how long the panel waits before
+going ambient (default 600 = 10 minutes). While music is playing it
+shows a slowly drifting now-playing display with album art; when idle
+it shows animated colour-cycling rings. Touching the screen anywhere
+brings the panel straight back.
+
+### Extra tabs
+
+The panel can show up to three extra tabs beside the Sonos one, each
+embedding another page on your network -- a Home Assistant dashboard,
+a Hubitat dashboard, a camera view, anything with a URL. This turns a
+single wall tablet into a whole-house control panel instead of just a
+music remote.
+
+Each tab is configured with four variables, where `n` is 2, 3, or 4:
+
+| Variable | Required | What it does |
+| --- | --- | --- |
+| `TABn_URL` | yes | Full URL of the page to embed. **The tab only appears if this is set** |
+| `TABn_TITLE` | no | Name shown on the tab (defaults to "Tab 2", "Tab 3", "Tab 4") |
+| `TABn_ICON` | no | An emoji, or a full image URL, shown before the title |
+| `TABn_COLOR` | no | Hex colour for the tab's underline, e.g. `#4a9eff` |
+
+A complete example, adding a Home Assistant tab and a camera tab:
+
+```bat
+set TAB2_TITLE=Home
+set TAB2_URL=http://192.168.1.50:8123
+set TAB2_ICON=https://192.168.1.50:8123/static/icons/favicon-192x192.png
+set TAB2_COLOR=#41bdf5
+
+set TAB3_TITLE=Cameras
+set TAB3_URL=http://192.168.1.60/dashboard
+```
+
+A single emoji works as an icon too, and is the easiest option in the
+Unraid template fields. In a Windows `.bat` file, though, emoji often
+get mangled by the console's character encoding -- use an image URL
+there instead, as above.
+
+On Unraid, enter those same values in the **Tab 2 Title / Tab 2 URL /
+Tab 2 Icon / Tab 2 Color** template fields (Tab 3 and Tab 4 are under
+"Show more settings"). Numbering doesn't have to be sequential -- you
+can configure Tab 3 alone and leave Tab 2 blank.
+
+Note that some sites refuse to be embedded in another page (Google
+and most public websites do this deliberately). Local dashboards such
+as Home Assistant and Hubitat embed fine, which is what this is for.
 
 
 ## Network Music Library
