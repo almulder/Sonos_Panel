@@ -3,7 +3,7 @@
 # package tree, at the cost of a somewhat larger image. Worth it for a
 # home-server deployment where reliability matters more than a few
 # extra MB.
-FROM node:18-slim
+FROM node:22-slim
 
 # tzdata so the TZ env actually works -- the Local Music Library's
 # scheduled rescans (RESCAN_SCHEDULE) are evaluated in local time, and

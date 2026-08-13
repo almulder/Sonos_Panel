@@ -134,7 +134,10 @@ the problem entirely.
 
 Download the **LTS** installer from
 [nodejs.org](https://nodejs.org) and run it, accepting the defaults.
-This is the engine the panel runs on.
+This is the engine the panel runs on. Node 20 or newer is required.
+
+To check it worked, open Command Prompt and run `node -v` -- it
+should print a version number like `v22.11.0` or higher.
 
 ### 2. Download Sonos Panel
 
@@ -228,9 +231,29 @@ is on the same network as the speakers, not a guest or IoT VLAN.
 to another number, such as `8081`, and use that in the browser
 address instead.
 
-**`npm install` fails.** Make sure Node.js installed correctly by
-running `node -v` -- it should print a version number of 18 or
-higher. If not, reinstall Node.js and reopen Command Prompt.
+**`npm install` fails with a long error mentioning
+`better-sqlite3`, `node-gyp`, or Visual Studio.** The panel uses one
+component that ships as a prebuilt binary; if npm can't download the
+right one, it tries to build it from source and fails without
+Microsoft's C++ build tools installed.
+
+First, run `node -v`. If it prints anything below `v20`, install a
+current Node.js and try again.
+
+Otherwise it's usually a failed download (the error contains
+`socket hang up` or `ECONNRESET`). Try:
+
+```
+npm cache clean --force
+npm install --omit=dev
+```
+
+Antivirus or VPN software sometimes blocks the binary download -- if
+it keeps failing, pause that briefly and retry. As a last resort you
+can install the "Desktop development with C++" workload from the
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/),
+which lets it compile locally, but that's a large download and is
+rarely necessary.
 
 **Music files don't appear.** Check `MUSIC_DIR` points at a real
 folder, and see the format limits below -- files the speakers can't
