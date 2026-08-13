@@ -2,34 +2,43 @@
 <Container version="2">
   <Name>Sonos_Panel</Name>
   <Repository>ghcr.io/almulder/sonos_panel:latest</Repository>
-  <Registry>https://github.com/almulder/Sonos_Panel/pkgs/container/sonos-panel</Registry>
+  <Registry>https://github.com/almulder/Sonos_Panel/pkgs/container/sonos_panel</Registry>
   <Network>br0</Network>
   <MyIP></MyIP>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support>https://github.com/almulder/Sonos_Panel/issues</Support>
   <Project>https://github.com/almulder/Sonos_Panel</Project>
-  <Overview>Sonos touchscreen panel - a Node/Express app that controls Sonos speakers via a browser-based touch UI.&#13;
+  <Overview>Sonos Panel - a self-hosted touchscreen web app for controlling a whole-house Sonos system. Point any number of cheap tablets at it and use them as wall-mounted control panels around the house. Everything is local: no cloud, no account, no internet dependency.&#13;
 &#13;
-This container requires a fixed IP address on a custom Docker network (br0) for Sonos SSDP discovery to work correctly. Standard bridge or host networking will not reliably discover speakers.&#13;
+Features: every room with grouping (the room you tap becomes the group head, like the official app), play/pause/skip/seek, per-room and group volume, EQ, sleep timers, shuffle/repeat/crossfade, full queue management with drag-to-reorder, Sonos playlists and favorites (organized by service AND by account, so multi-login households don't interrupt each other), line-in sources, an ambient screensaver, and up to 3 extra tabs embedding other local dashboards such as Home Assistant or Hubitat.&#13;
 &#13;
-Change Docker custom network type to ipvlan (highly recommended for Sonos)&#13;
+Network Music Library: point the optional Music Path at a folder of music files and the panel indexes them and streams them straight to your speakers - with no Sonos 65,000-song index limit. Browse by Artists, Albums, Songs, Genres, Composers, Folders, or Recently Added, with unified search and self-healing album art.&#13;
 &#13;
-Setup instructions:&#13;
-1. In Unraid, go to Settings -&gt; Docker -&gt; Network Types, and make sure br0 is set to ipvlan mode.&#13;
-2. When adding this container, set Network Type to br0.&#13;
-3. Set the Fixed IP Address field to a free IP on your LAN (must not conflict with your router's DHCP range or any other device).&#13;
-4. Apply, then access the panel at http://&lt;the-ip-you-chose&gt;/ - no port number needed.&#13;
+Optional 4-digit passcode locks structural changes (deleting or renaming playlists, editing groups) behind an onscreen keypad while leaving playback and queue control open for guests.&#13;
 &#13;
-Optional: map the Music Path field at a folder of music files on this server to enable the built-in Local Music Library (streams your files straight to the speakers -- no Sonos 65,000-song index limit).</Overview>
-  <Category>HomeAutomation:</Category>
+Supports BOTH Sonos S1 and S2 systems - set the Sonos System field to s1 or s2. One container controls one generation (S1 and S2 are separate Sonos households that cannot mix); to control both, install this container twice with different IPs and appdata paths.&#13;
+&#13;
+IMPORTANT - this container needs a fixed IP on a custom Docker network (br0) for Sonos SSDP discovery and for speakers to stream local music back from the panel. Bridge networking will not work.&#13;
+&#13;
+Setup:&#13;
+1. Settings -&gt; Docker -&gt; Network Types: set br0 to ipvlan mode (highly recommended for Sonos).&#13;
+2. Set Network Type to br0 on this container.&#13;
+3. Set Fixed IP Address to a free IP on your LAN (outside your router's DHCP range).&#13;
+4. Apply, then open http://&lt;the-ip-you-chose&gt;/ - no port number needed.</Overview>
+  <Category>MediaApp:Music HomeAutomation:</Category>
   <WebUI>http://[IP]/</WebUI>
-  <TemplateURL/>
+  <TemplateURL>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/templates/sonos-panel.xml</TemplateURL>
+  <License>MIT</License>
+  <ReadMe>https://github.com/almulder/Sonos_Panel/blob/main/README.md</ReadMe>
+  <ExtraSearchTerms>sonos speaker multiroom music player controller panel kiosk tablet touchscreen whole house audio s1 s2</ExtraSearchTerms>
+  <!-- Screenshots make a big difference for a UI app. Add PNGs to the
+       repo, then uncomment:
+  <Screenshot>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/docs/screenshot-rooms.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/docs/screenshot-nowplaying.png</Screenshot>
+  -->
   <Icon>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/public/icons/icon-512.png</Icon>
   <ExtraParams/>
-  <PostArgs/>
-  <CPUset/>
-  <DateInstalled/>
   <DonateText/>
   <DonateLink/>
   <Requires/>

@@ -102,8 +102,9 @@ switch this to bridge networking.
 Full walkthrough in [`UNRAID_SETUP.md`](UNRAID_SETUP.md). The short
 version:
 
-1. **Docker tab -> Add Container**, using `my-Sonos_Panel.xml` from
-   this repo (place it in
+1. **Docker tab -> Add Container**, using
+   [`templates/sonos-panel.xml`](templates/sonos-panel.xml) from this
+   repo (place it in
    `/boot/config/plugins/dockerMan/templates-user/`, or paste its
    fields manually)
 2. **Network Type: Custom (br0)** with a **fixed IP** on the same

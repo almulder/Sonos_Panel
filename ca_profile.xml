@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<CommunityApplications>
+  <Profile>
+Sonos Panel by almulder -- a self-hosted, touchscreen-friendly web app for controlling a whole-house Sonos system from cheap wall-mounted tablets.
+
+Runs entirely on your LAN with no cloud dependency: all speaker control is local UPnP with real-time event subscriptions. Includes a built-in Network Music Library that streams your own music files straight to the speakers, sidestepping the Sonos 65,000-song index limit, plus room grouping, full queue management, playlists, favorites organized by service and account, an optional passcode lock for guest-proofing, and support for both Sonos S1 and S2 systems.
+
+Support is handled through GitHub issues on the project repository.
+  </Profile>
+  <Icon>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/public/icons/icon-512.png</Icon>
+  <WebPage>https://github.com/almulder/Sonos_Panel</WebPage>
+  <!-- Optional: add an Unraid forum support thread here if you create one.
+  <Forum>https://forums.unraid.net/topic/YOUR_TOPIC</Forum>
+  -->
+</CommunityApplications>
