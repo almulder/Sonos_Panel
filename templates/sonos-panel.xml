@@ -32,11 +32,11 @@ Setup:&#13;
   <License>MIT</License>
   <ReadMe>https://github.com/almulder/Sonos_Panel/blob/main/README.md</ReadMe>
   <ExtraSearchTerms>sonos speaker multiroom music player controller panel kiosk tablet touchscreen whole house audio s1 s2</ExtraSearchTerms>
-  <!-- Screenshots make a big difference for a UI app. Add PNGs to the
-       repo, then uncomment:
   <Screenshot>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/docs/screenshot-rooms.png</Screenshot>
   <Screenshot>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/docs/screenshot-nowplaying.png</Screenshot>
-  -->
+  <Screenshot>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/docs/screenshot-group.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/docs/screenshot-queue.png</Screenshot>
+  <Screenshot>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/docs/screenshot-library.png</Screenshot>
   <Icon>https://raw.githubusercontent.com/almulder/Sonos_Panel/main/public/icons/icon-512.png</Icon>
   <ExtraParams/>
   <DonateText/>
