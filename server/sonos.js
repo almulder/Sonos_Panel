@@ -136,6 +136,9 @@ let usingMock = true;
 let devicesByName = new Map();
 let displayNameByKey = new Map();
 let mockState = buildMockState();
+// UUID of the physical Sonos player selected to represent each logical room.
+// Stereo pairs expose multiple ZoneGroupMembers with the same ZoneName.
+let selectedDeviceUUID = new Map();
 
 // Cache of the last full getRooms() result, keyed by room name, plus the
 // last known topology (roomName -> coordinatorName). Targeted polling
@@ -279,6 +282,7 @@ async function init() {
               const uri = new URL(member.Location);
               devicesByName.set(key, new Sonos(uri.hostname, parseInt(uri.port, 10)));
               displayNameByKey.set(key, member.ZoneName);
+              selectedDeviceUUID.set(key, member.UUID);
             } catch (err) {
               debugLog.warn('sonos', `Could not construct device for zone member ${member.ZoneName}: ${err.message}`);
             }
@@ -649,6 +653,12 @@ function healDeviceAddressIfChanged(member) {
     const key = (member.ZoneName || '').toLowerCase();
     const existing = devicesByName.get(key);
     if (!existing) return; // a room we've never known about -- not this function's job
+
+    // A stereo pair exposes multiple physical players with the same
+    // ZoneName. Only heal the player originally selected for this room.
+    const selectedUUID = selectedDeviceUUID.get(key);
+    if (selectedUUID && member.UUID !== selectedUUID) return;
+
     const uri = new URL(member.Location);
     const newHost = uri.hostname;
     const newPort = parseInt(uri.port, 10) || existing.port;
