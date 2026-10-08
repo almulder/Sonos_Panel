@@ -342,6 +342,7 @@ function init(options) {
       countTracks: db.prepare('SELECT COUNT(*) AS c FROM tracks'),
       countIncompatible: db.prepare('SELECT COUNT(*) AS c FROM incompatible'),
       listIncompatible: db.prepare('SELECT path, reason FROM incompatible ORDER BY path'),
+      getIncompatibleReason: db.prepare('SELECT reason FROM incompatible WHERE path = ?'),
       getMeta: db.prepare('SELECT value FROM meta WHERE key = ?'),
       setMeta: db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
     };
@@ -805,6 +806,38 @@ function getStatus() {
   };
 }
 
+// Reason a library-relative path was filed as incompatible, or null if
+// it isn't on the list. Used to explain stream/playback failures in the log.
+function getIncompatibleReason(rel) {
+  if (!db || !rel) return null;
+  const row = stmts.getIncompatibleReason.get(rel);
+  return row ? row.reason : null;
+}
+
+// Maps a playback URI to the incompatible list. Handles both ways a
+// local file reaches a speaker: this panel's own /stream/<rel> URLs
+// (exact match) and Sonos-indexed share URIs (x-file-cifs://host/share/
+// path/to/file), where the share root may differ from the folder this
+// container mounts -- so those match when a library-relative path is a
+// trailing part of the URI path (at least folder/file, to avoid
+// false positives on bare filenames).
+function getIncompatibleReasonForUri(uri) {
+  if (!db || !uri || typeof uri !== 'string') return null;
+  try {
+    const stream = uri.match(/^https?:\/\/[^/]+\/stream\/(.+?)(?:\?.*)?$/);
+    if (stream) return getIncompatibleReason(decodeURIComponent(stream[1]));
+    const cifs = uri.match(/^x-file-cifs:\/\/[^/]+\/(.+)$/i);
+    if (cifs) {
+      const parts = decodeURIComponent(cifs[1]).split('/').filter(Boolean);
+      for (let i = 0; i <= parts.length - 2; i++) {
+        const reason = getIncompatibleReason(parts.slice(i).join('/'));
+        if (reason) return reason;
+      }
+    }
+  } catch (err) { /* malformed URI -- treat as unknown */ }
+  return null;
+}
+
 function getIncompatibleList() {
   if (!db) return [];
   return stmts.listIncompatible.all().map((r) => ({
@@ -819,6 +852,8 @@ module.exports = {
   getDatabase,
   getStatus,
   getIncompatibleList,
+  getIncompatibleReason,
+  getIncompatibleReasonForUri,
   isAvailable,
   // exported for direct testing
   evaluateCompatibility,

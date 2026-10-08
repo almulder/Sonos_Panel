@@ -667,10 +667,17 @@ app.get('/stream/*', (req, res) => {
   if (!abs || !localLibrary.isAudioFile(abs)) {
     return res.status(404).json({ error: 'Not found' });
   }
+  const badReason = localScanner.getIncompatibleReason(rel);
+  if (badReason) {
+    debugLog.warn('stream', `Speaker requested a file the scanner marked incompatible: "${rel}" -- ${badReason}. Sonos will likely refuse or skip it.`);
+  }
   res.sendFile(abs, {
     dotfiles: 'deny',
     headers: { 'Content-Type': localLibrary.contentTypeFor(abs) }
   }, (err) => {
+    if (err && err.code !== 'ECONNABORTED' && err.message !== 'Request aborted') {
+      debugLog.warn('stream', `Streaming "${rel}" failed: ${err.message}`);
+    }
     if (err && !res.headersSent) {
       res.status(err.statusCode === 404 || err.code === 'ENOENT' ? 404 : 500).end();
     }

@@ -36,6 +36,7 @@ const fs = require('fs');
 const debugLog = require('./debugLog');
 const localLibrary = require('./localLibrary');
 const localBrowse = require('./localBrowse');
+const localScanner = require('./localScanner');
 
 // Manual overrides that are more reliable than guessing at UPnP fields --
 // see getLineInRooms() for why this exists. Missing/invalid config.json
@@ -1295,6 +1296,7 @@ async function getNowPlaying(roomName) {
           if (items && items[0] && items[0].title) {
             nextTrack = { title: items[0].title, artist: items[0].artist || '' };
           }
+          if (state === 'playing') guardQueueAhead(roomName, device, track.uri, trackNo, items && items[0]);
         }
       } catch (err) { /* no next line, no drama */ }
     }
@@ -1349,14 +1351,20 @@ async function next(roomName) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
-  await guarded(`next(${roomName})`, () => device.next());
+  await guarded(`next(${roomName})`, async () => {
+    await device.next();
+    await skipPastIncompatible(roomName, device, 'next');
+  });
 }
 
 async function previous(roomName) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
-  await guarded(`previous(${roomName})`, () => device.previous());
+  await guarded(`previous(${roomName})`, async () => {
+    await device.previous();
+    await skipPastIncompatible(roomName, device, 'previous');
+  });
 }
 
 async function setVolume(roomName, vol) {
@@ -1992,6 +2000,65 @@ async function browseContainer(roomName, containerId) {
   return items;
 }
 
+// ---------------------------------------------------------------------
+// Incompatible-file guard. The scanner records files Sonos can't play
+// (hi-res, over-bitrate, unsupported codec...). Playlists can still
+// reference them, and a speaker that hits one either errors or silently
+// skips. These helpers (1) leave such tracks out when a queue is built,
+// (2) log WHY, and (3) step past them if one is already queued.
+function skipIfIncompatible(label, track) {
+  const reason = localScanner.getIncompatibleReasonForUri(track.uri);
+  if (!reason) return false;
+  debugLog.warn('sonos', `${label}: skipping incompatible file "${track.title || track.uri}" -- ${reason}`);
+  return true;
+}
+
+const incompatibleSkipAt = new Map(); // room -> ms of last auto-skip, throttles repeats
+const MAX_CONSECUTIVE_SKIPS = 8;
+
+// After a next()/previous(), if the track now loaded is incompatible,
+// keep going in the same direction (honoring shuffle/repeat, since the
+// speaker itself picks the next track) until a playable one is found.
+async function skipPastIncompatible(roomName, device, direction) {
+  for (let i = 0; i < MAX_CONSECUTIVE_SKIPS; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    let uri;
+    try {
+      uri = (await device.currentTrack()).uri;
+    } catch (err) {
+      return;
+    }
+    const reason = localScanner.getIncompatibleReasonForUri(uri);
+    if (!reason) return;
+    debugLog.warn('sonos', `${direction}(${roomName}): track is incompatible, skipping on -- ${reason} (${uri})`);
+    await (direction === 'previous' ? device.previous() : device.next());
+  }
+  debugLog.warn('sonos', `${direction}(${roomName}): gave up after ${MAX_CONSECUTIVE_SKIPS} consecutive incompatible tracks`);
+}
+
+// Called from getNowPlaying with what the speaker is on / about to play.
+// If the CURRENT track is incompatible, advance; if the NEXT queued track
+// is, remove it from the queue so playback flows straight past it.
+// Fire-and-forget and throttled -- the UI polls this constantly.
+function guardQueueAhead(roomName, device, currentUri, trackNo, nextItem) {
+  const now = Date.now();
+  if (now - (incompatibleSkipAt.get(roomName) || 0) < 4000) return;
+  const curReason = localScanner.getIncompatibleReasonForUri(currentUri);
+  const nextReason = nextItem && localScanner.getIncompatibleReasonForUri(nextItem.uri);
+  if (!curReason && !nextReason) return;
+  incompatibleSkipAt.set(roomName, now);
+  (async () => {
+    if (curReason) {
+      debugLog.warn('sonos', `${roomName}: current track is incompatible, skipping to next -- ${curReason} (${currentUri})`);
+      await device.next();
+      await skipPastIncompatible(roomName, device, 'next');
+    } else {
+      debugLog.warn('sonos', `${roomName}: next queued track "${nextItem.title || nextItem.uri}" is incompatible, removing it from the queue -- ${nextReason}`);
+      await device.avTransportService().RemoveTrackFromQueue({ InstanceID: 0, ObjectID: `Q:0/${trackNo + 1}`, UpdateID: 0 });
+    }
+  })().catch((err) => debugLog.warn('sonos', `${roomName}: incompatible-track guard failed: ${err.message}`));
+}
+
 async function playItem(roomName, uri, metadata) {
   if (usingMock) return;
   const device = findDevice(roomName);
@@ -2082,15 +2149,26 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
   roomLocalQueueContext.delete(roomName);
   await guarded(`playPlaylistTrack(${roomName})`, async () => {
     const tracks = await browseContainer(roomName, playlistContainerId);
-    const playableTracks = tracks.filter((t) => t.uri);
+    const playableTracks = tracks.filter((t) => t.uri && !skipIfIncompatible(`playPlaylistTrack(${roomName})`, t));
     const targetIndex = playableTracks.findIndex((t) => t.uri === trackUri);
 
     await device.flush();
+    const queuedUris = [];
     for (const track of playableTracks) {
-      await device.queue({ uri: track.uri, metadata: track.metadata || buildTrackMetadata(track) });
+      try {
+        await device.queue({ uri: track.uri, metadata: track.metadata || buildTrackMetadata(track) });
+        queuedUris.push(track.uri);
+      } catch (err) {
+        debugLog.warn('sonos', `playPlaylistTrack(${roomName}): Sonos refused "${track.title}" (${track.uri}) -- skipping it: ${err.message}`);
+      }
+    }
+    if (queuedUris.length === 0) throw new Error(`none of the ${playableTracks.length} track(s) in "${playlistTitle || playlistContainerId}" could be queued`);
+    if (queuedUris.length < playableTracks.length) {
+      debugLog.warn('sonos', `playPlaylistTrack(${roomName}): queued ${queuedUris.length} of ${playableTracks.length} track(s); the rest were refused`);
     }
     await device.selectQueue();
-    await device.selectTrack(targetIndex >= 0 ? targetIndex + 1 : 1);
+    const queuedTarget = queuedUris.indexOf(trackUri);
+    await device.selectTrack(queuedTarget >= 0 ? queuedTarget + 1 : 1);
     await device.play();
     roomPlaylistContext.set(roomName, {
       id: playlistContainerId,
@@ -2366,8 +2444,19 @@ async function playTracksAsQueue(roomName, tracks) {
   roomPlaylistContext.delete(roomName);
   await guarded(`playTracksAsQueue(${roomName})`, async () => {
     await device.flush();
+    let queued = 0;
     for (const track of tracks) {
-      await device.queue({ uri: track.uri, metadata: buildLocalTrackMetadata(track) });
+      if (skipIfIncompatible(`playTracksAsQueue(${roomName})`, track)) continue;
+      try {
+        await device.queue({ uri: track.uri, metadata: buildLocalTrackMetadata(track) });
+        queued += 1;
+      } catch (err) {
+        debugLog.warn('sonos', `playTracksAsQueue(${roomName}): Sonos refused "${track.title || track.uri}" (${track.uri}) -- skipping it: ${err.message}`);
+      }
+    }
+    if (queued === 0) throw new Error(`none of the ${tracks.length} track(s) could be queued`);
+    if (queued < tracks.length) {
+      debugLog.warn('sonos', `playTracksAsQueue(${roomName}): queued ${queued} of ${tracks.length} track(s); the rest were refused`);
     }
     await device.selectQueue();
     await device.play();
