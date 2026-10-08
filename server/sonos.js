@@ -1225,15 +1225,16 @@ async function getNowPlaying(roomName) {
       } else {
         const serviceMap = await loadServiceNameMap();
         const serviceLabel = deriveServiceLabel(track, track.uri, serviceMap);
-        if (serviceLabel) {
-          const fav = await resolveRoomFavorite(roomName);
-          if (fav) {
-            sourceLine = favoriteSourceLine(fav, favoritesCache.items || []);
-          } else {
-            const stationToken = extractStationToken(track.uri);
-            const stationName = await findStationNameFromFavorites(roomName, stationToken);
-            sourceLine = stationName ? `${serviceLabel} - ${stationName}` : serviceLabel;
-          }
+        // Resolved first and regardless of serviceLabel: stations like
+        // "80s80s" have URIs that don't name a service at all, but are
+        // still saved favorites.
+        const fav = await resolveRoomFavorite(roomName);
+        if (fav) {
+          sourceLine = favoriteSourceLine(fav, favoritesCache.items || []);
+        } else if (serviceLabel) {
+          const stationToken = extractStationToken(track.uri);
+          const stationName = await findStationNameFromFavorites(roomName, stationToken);
+          sourceLine = stationName ? `${serviceLabel} - ${stationName}` : serviceLabel;
         }
       }
     }
@@ -1941,6 +1942,16 @@ async function resolveRoomFavorite(roomName) {
     if (!transportUri) return null;
     const direct = favorites.find((f) => f.uri && sameFavoriteUri(f.uri, transportUri));
     if (direct) return direct;
+    if (!transportUri.startsWith('x-rincon-queue:')) {
+      // Some stations come back under a different URI than the saved
+      // favorite; their station title in the metadata still matches.
+      const rawTitle = (String(media.CurrentURIMetaData || '').match(/<dc:title>([^<]*)<\/dc:title>/) || [])[1];
+      const title = rawTitle && rawTitle.replace(/&amp;/g, '&').replace(/&apos;|&#39;/g, "'").replace(/&quot;/g, '"').trim().toLowerCase();
+      if (title) {
+        const byTitle = favorites.find((f) => f.uri && String(f.title || '').trim().toLowerCase() === title);
+        if (byTitle) return byTitle;
+      }
+    }
     if (transportUri.startsWith('x-rincon-queue:')) {
       const ctx = roomFavoriteContext.get(coordName);
       if (!ctx) return null;
@@ -1959,7 +1970,8 @@ async function resolveRoomFavorite(roomName) {
 // one login in this household.
 function favoriteSourceLine(fav, favorites) {
   const group = groupLabelFor(fav);
-  let line = `${group} - ${fav.title}`;
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  let line = norm(group) === norm(fav.title) ? fav.title : `${group} - ${fav.title}`;
   if (fav.sid && fav.sn !== undefined && isMultiAccountGroup(favorites, group)) {
     line += ` - ${accountLabelFor(fav.sid, fav.sn)}`;
   }
@@ -1969,9 +1981,9 @@ function favoriteSourceLine(fav, favorites) {
 // Every coordinator that is currently playing, with the favorite it is
 // on. Briefly cached -- the browse screens ask on every open.
 let sourcesInUseCache = { items: [], at: 0 };
-async function getSourcesInUse() {
+async function getSourcesInUse(force) {
   if (usingMock) return [];
-  if (Date.now() - sourcesInUseCache.at < 4000) return sourcesInUseCache.items;
+  if (!force && Date.now() - sourcesInUseCache.at < 4000) return sourcesInUseCache.items;
   const items = [];
   const seen = new Set();
   for (const room of lastRoomsByName.values()) {
@@ -2943,6 +2955,7 @@ module.exports = {
   updateSavedGroup,
   getLastKnownRooms,
   onLiveUpdate,
+  getSourcesInUse,
   onNowPlayingChanged,
   onGroupVolumeChanged,
   getNowPlaying,

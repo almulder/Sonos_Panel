@@ -77,6 +77,8 @@
       } else if (msg.type === 'sonos:nowplaying-changed') {
         SonosView.handleNowPlayingChanged(msg.room);
         if (window.QueuePanel) window.QueuePanel.handleNowPlayingChanged(msg.room);
+      } else if (msg.type === 'sonos:sources-inuse') {
+        SonosView.handleSourcesInUse(msg.items);
       } else if (msg.type === 'sonos:groupvolume-changed') {
         SonosView.handleGroupVolumeChanged();
       } else if (msg.type === 'queue:changed') {

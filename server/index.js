@@ -80,6 +80,7 @@ const SONOS_FULL_POLL_INTERVAL_MS = 500;
 // optimistic topology patch) instead of waiting for the next scheduled
 // poll tick. Set once main() creates the real broadcast function.
 let broadcastNow = null;
+let scheduleInUsePushHook = null; // set in main(); lets routes nudge the in-use push
 
 // Brief burst of faster Sonos polling right after a room/volume/group
 // action, then back to the normal 2s cadence -- per request, room
@@ -471,6 +472,7 @@ app.post('/api/sonos/room/:room/play-item', asyncHandler(async (req, res) => {
   debugLog.info('sonos', `Play source: "${rawLabel || '(no service label)'}" | music_services.js key: "${key}" | uri scheme: ${String(req.body.uri || '').split(':')[0]}`);
   await sonos.playItem(req.params.room, req.body.uri, req.body.metadata);
   triggerSonosFastPoll([req.params.room]);
+  setTimeout(() => { if (scheduleInUsePushHook) scheduleInUsePushHook(); }, 1500);
   res.json({ ok: true });
 }));
 
@@ -786,9 +788,35 @@ async function main() {
 
   const wss = new WebSocketServer({ server, path: '/ws' });
 
+  let lastInUseJson = null;
   wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'hello', sonosMock: sonos.isMock() }));
+    if (lastInUseJson) ws.send(JSON.stringify({ type: 'sonos:sources-inuse', items: JSON.parse(lastInUseJson) }));
   });
+
+  // Which music sources (service / account / favorite) are being played
+  // right now. Pushed to every open screen only when it CHANGES, so the
+  // browse screens can move their dots in place -- no refetch, no
+  // re-render, nothing that could reset what someone is in the middle of.
+  let inUsePending = false;
+  async function pushSourcesInUse() {
+    try {
+      const items = await sonos.getSourcesInUse(true);
+      const json = JSON.stringify(items);
+      if (json === lastInUseJson) return;
+      lastInUseJson = json;
+      broadcast({ type: 'sonos:sources-inuse', items });
+    } catch (err) {
+      debugLog.warn('server', `sources-in-use push failed: ${err.message}`);
+    }
+  }
+  function scheduleInUsePush() {
+    if (inUsePending) return;
+    inUsePending = true;
+    setTimeout(() => { inUsePending = false; pushSourcesInUse(); }, 700);
+  }
+  scheduleInUsePushHook = scheduleInUsePush;
+  setInterval(scheduleInUsePush, 5000); // safety net for changes made outside the panel
 
   function broadcast(payload) {
     const msg = JSON.stringify(payload);
@@ -818,6 +846,7 @@ async function main() {
   // the poll loop below.
   sonos.onLiveUpdate((rooms) => {
     broadcast({ type: 'sonos:rooms', rooms });
+    scheduleInUsePush();
   });
 
   // Two lightweight signals -- these don't carry the changed data
@@ -827,6 +856,7 @@ async function main() {
   // existing refresh logic rather than duplicating it here).
   sonos.onNowPlayingChanged((room) => {
     broadcast({ type: 'sonos:nowplaying-changed', room });
+    scheduleInUsePush();
   });
   sonos.onGroupVolumeChanged(() => {
     broadcast({ type: 'sonos:groupvolume-changed' });
@@ -857,6 +887,7 @@ async function main() {
           ? await sonos.getRoomsTargeted([...sonosFastPollTargets])
           : await sonos.getRooms();
         broadcast({ type: 'sonos:rooms', rooms });
+        scheduleInUsePush();
       } catch (err) {
         debugLog.warn('server', `poll loop (sonos) error: ${err.message}`);
       }

@@ -1484,16 +1484,76 @@ const SonosView = (() => {
   }
 
   // Amber dot (same look as the playing dot on room rows) in front of any
-  // source, account or favorite a room is playing right now. Added right
-  // after the row is created so it always sits first.
-  function markInUse(li, item) {
-    if (!item || !item.inUse) return;
-    const dot = document.createElement('span');
-    dot.className = 'roomrow__playing-dot';
-    const rooms = (item.inUseRooms || []).join(', ');
-    dot.title = rooms ? `Playing now in ${rooms}` : 'Playing now';
+  // source, account or favorite a room is playing right now.
+  //
+  // Rows are tagged with what they represent (data-inuse-*), and the
+  // server pushes the full "in use" list over the WebSocket whenever it
+  // changes. handleSourcesInUse() then adds/removes dots on the rows that
+  // are ALREADY on screen -- nothing is refetched or re-rendered, so
+  // whatever someone is in the middle of (scroll position, an open
+  // account, a pending tap) is left alone.
+  let sourcesInUse = null; // null until the first push arrives
+
+  function favUriIdentity(uri) {
+    const s = String(uri || '');
+    let base = s.split('?')[0].replace(/^[a-z0-9-]+:/i, '');
+    try { base = decodeURIComponent(base); } catch (err) { /* keep raw */ }
+    return {
+      base: base.toLowerCase(),
+      sid: (s.match(/[?&]sid=(\d+)/) || [])[1] || null,
+      sn: (s.match(/[?&]sn=(\d+)/) || [])[1] || null
+    };
+  }
+  function sameFavUri(a, b) {
+    const x = favUriIdentity(a);
+    const y = favUriIdentity(b);
+    if (!x.base || x.base !== y.base) return false;
+    if (x.sid && y.sid && x.sid !== y.sid) return false;
+    return !x.sn || !y.sn || x.sn === y.sn;
+  }
+
+  function inUseRoomsForRow(li) {
+    const d = li.dataset;
+    let hits;
+    if (d.inuseUri) hits = sourcesInUse.filter((u) => u.uri && sameFavUri(u.uri, d.inuseUri));
+    else if (d.inuseGroup && d.inuseSn !== undefined) hits = sourcesInUse.filter((u) => u.group === d.inuseGroup && String(u.sn) === d.inuseSn);
+    else if (d.inuseGroup) hits = sourcesInUse.filter((u) => u.group === d.inuseGroup);
+    else return null;
+    const rooms = [...new Set(hits.flatMap((u) => u.rooms || []))];
+    return rooms.length ? rooms : null;
+  }
+
+  function setRowDot(li, rooms) {
+    let dot = li.querySelector(':scope > .sourcepanel__inuse');
+    if (!rooms) {
+      if (dot) dot.remove();
+      return;
+    }
+    if (!dot) {
+      dot = document.createElement('span');
+      dot.className = 'roomrow__playing-dot sourcepanel__inuse';
+      li.insertBefore(dot, li.firstChild);
+    }
+    dot.title = rooms.length ? `Playing now in ${rooms.join(', ')}` : 'Playing now';
     dot.setAttribute('aria-label', dot.title);
-    li.appendChild(dot);
+  }
+
+  function markInUse(li, item) {
+    if (!item) return;
+    if (item.isAccountEntry) {
+      li.dataset.inuseGroup = item.serviceLabel || '';
+      li.dataset.inuseSn = String(item.sn);
+    } else if (item.id && String(item.id).startsWith('svc:')) {
+      li.dataset.inuseGroup = item.title;
+    } else if (item.uri && !item.browsable) {
+      li.dataset.inuseUri = item.uri;
+    } else {
+      return;
+    }
+    // Live list wins once we have it; until then use what the server
+    // computed when it sent this screen.
+    if (sourcesInUse !== null) setRowDot(li, inUseRoomsForRow(li));
+    else if (item.inUse) setRowDot(li, item.inUseRooms || []);
   }
 
   function renderTopLevel(groups) {
@@ -2267,6 +2327,14 @@ const SonosView = (() => {
     // data themselves, so this just re-runs the same refresh logic
     // already used after a normal user action. No-ops if the change
     // doesn't concern whatever's currently focused.
+    // Server push: the set of sources currently playing changed. Only
+    // moves dots on rows already on screen.
+    handleSourcesInUse(items) {
+      sourcesInUse = Array.isArray(items) ? items : [];
+      sourcePanelItems.querySelectorAll('li[data-inuse-group], li[data-inuse-uri]').forEach((li) => {
+        setRowDot(li, inUseRoomsForRow(li));
+      });
+    },
     async handleNowPlayingChanged(room) {
       if (room === focusedRoom) await refreshNowPlaying();
     },
