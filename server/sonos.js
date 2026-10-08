@@ -1985,7 +1985,9 @@ async function browseContainerPaged(roomName, containerId, start = 0, count = 20
 
     if (result.length === 0) {
       debugLog.warn('sonos', `browseContainer(${containerId}) returned 0 items -- either genuinely empty, or this ObjectID isn't valid for your system`);
-    } else {
+    } else if (!(containerId === 'Q:0' && count === 1)) {
+      // (single-item Q:0 peeks come from the now-playing "Up Next" poll
+      // every second or so -- logging them just drowns everything else)
       debugLog.info('sonos', `browseContainer(${containerId}) start=${start} -> ${result.length} of ${total} item(s)`);
     }
     return { items: result, total };
@@ -2059,7 +2061,18 @@ function guardQueueAhead(roomName, device, currentUri, trackNo, nextItem) {
   })().catch((err) => debugLog.warn('sonos', `${roomName}: incompatible-track guard failed: ${err.message}`));
 }
 
-async function playItem(roomName, uri, metadata) {
+// Taps on the same room are queued one after another: overlapping
+// flush/queue/play sequences (e.g. a second tap while a slow Pandora
+// container is still loading) trample each other and cause UPnP 701s.
+const playItemChains = new Map(); // room -> tail promise
+function playItem(roomName, uri, metadata) {
+  const prev = playItemChains.get(roomName) || Promise.resolve();
+  const run = prev.catch(() => {}).then(() => playItemNow(roomName, uri, metadata));
+  playItemChains.set(roomName, run.catch(() => {}));
+  return run;
+}
+
+async function playItemNow(roomName, uri, metadata) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
@@ -2086,9 +2099,22 @@ async function playItem(roomName, uri, metadata) {
       await device.flush();
       await device.queue({ uri, metadata });
       await device.selectQueue();
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      await device.play();
-      return;
+      // Pandora containers expand into the queue asynchronously, and Play
+      // answers 701 (transition not available) until the speaker has
+      // finished loading -- so retry with a growing pause instead of
+      // failing on the first attempt.
+      let lastErr;
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+        try {
+          await device.play();
+          return;
+        } catch (err) {
+          lastErr = err;
+          debugLog.warn('sonos', `playItem(${roomName}): Play on queued container failed (attempt ${attempt}/6): ${err.message.slice(0, 120)}`);
+        }
+      }
+      throw lastErr;
     }
 
     const setUri = () => (metadata ? device.setAVTransportURI({ uri, metadata }) : device.setAVTransportURI(uri));
