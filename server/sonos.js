@@ -1764,6 +1764,7 @@ function extractStationToken(uri) {
 // startup warm-up. Both fixed now, mirroring the Playlists cache.
 const FAVORITES_CACHE_MS = 30000;
 let favoritesCache = { items: null, at: 0, refreshing: false };
+let lastFavoriteLabelsLogged = null; // only log label list when it changes
 
 // ---------------------------------------------------------------------
 // Household service accounts -- Sonos supports multiple logins of the
@@ -1845,7 +1846,11 @@ async function refreshFavoritesCache(roomName) {
   try {
     const items = await attachAccountInfo(await browseContainer(roomName, 'FV:2'));
     const rawLabels = [...new Set(items.map((i) => i.serviceLabel).filter(Boolean))];
-    debugLog.info('sonos', `Favorite service labels (raw from Sonos): ${rawLabels.join(' | ') || '(none)'}`);
+    const labelLine = rawLabels.join(' | ') || '(none)';
+    if (labelLine !== lastFavoriteLabelsLogged) {
+      lastFavoriteLabelsLogged = labelLine;
+      debugLog.info('sonos', `Favorite service labels (raw from Sonos): ${labelLine}`);
+    }
     favoritesCache = { items, at: Date.now(), refreshing: false };
     return items;
   } catch (err) {
@@ -2004,6 +2009,21 @@ async function playItem(roomName, uri, metadata) {
     // same pattern already used for the Play call below.
     await device.pause().catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // Container-style favorites (x-rincon-cpcontainer / x-rincon-playlist
+    // -- e.g. newly added Pandora stations or playlists) can't be set as
+    // the transport URI directly; Sonos answers UPnP 714. The official
+    // app loads them into the queue and plays the queue instead, so do
+    // the same: flush -> queue(uri + resMD) -> selectQueue -> play.
+    if (metadata && /^x-rincon-(cpcontainer|playlist):/i.test(uri)) {
+      await device.flush();
+      await device.queue({ uri, metadata });
+      await device.selectQueue();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await device.play();
+      return;
+    }
+
     const setUri = () => (metadata ? device.setAVTransportURI({ uri, metadata }) : device.setAVTransportURI(uri));
     try {
       await setUri();
