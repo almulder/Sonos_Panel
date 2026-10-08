@@ -2021,6 +2021,8 @@ button:focus-visible,
   font-size: 14px;
   cursor: pointer;
 }
+.sourcepanel__actionbtn--danger { border-color: rgba(255, 90, 90, 0.5); color: #ff8a8a; }
+
 .sourcepanel__actionbtn--primary {
   background: var(--amber);
   border-color: var(--amber);
