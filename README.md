@@ -82,6 +82,59 @@ not a panel limitation.
 - Up to 3 extra tabs alongside Sonos, each embedding another local
   dashboard (Hubitat, Home Assistant, anything on your LAN)
 
+### Updated: v0.16.0 - Oct 08, 2026
+
+- **Source line shows exactly which favorite is playing**: instead of
+  just "Pandora" or "iHeartRadio", the line under the room name reads
+  `Pandora - Juicy M Radio` or `iHeartRadio - Seether`. When a service
+  has more than one login in the household, the account is added too:
+  `Pandora - Juicy M Radio - Albert's Favorites`
+- **"Playing now" markers on the source screens**: an amber dot (the
+  same one used on room rows) appears in front of any service,
+  account, favorite, and Sonos playlist that a room is playing right
+  now -- hover it to see which room. Handy in a multi-person home for
+  spotting an account that's already in use before picking a station
+  and cutting someone off. Markers update live on every open screen as
+  music starts and stops, without a refresh, so nobody's place on
+  screen is reset
+- **Artwork fallback**: when a source doesn't send cover art, the panel
+  uses the best available image in this order: the song's cover, then
+  the station/favorite's artwork, then the music service's icon
+- **Cleaner now-playing info**: when a source (TuneIn and other raw
+  streams) reports a long stream address or file path instead of real
+  song info, it's hidden and the source name shows instead
+- **Incompatible-file protection during playback**: files the scanner
+  marked incompatible are left out when a playlist or queue is built,
+  skipped over with next/previous, and removed from the live queue
+  (never from the saved playlist) when they come up next, so one
+  unplayable file no longer stops everything. Each skip is written to
+  the log with the reason
+
+## Bug fixes
+
+### Updated: v0.16.0 - Oct 08, 2026
+
+With thanks to everyone who reported them:
+
+- **Playlists with incompatible files kicked you back to the home
+  page** -- one track the speaker refused used to abort the whole
+  playlist. Such tracks are now skipped and logged with the reason, and
+  the rest of the playlist plays. Reported by
+  [@Valdean3](https://github.com/Valdean3)
+  ([#2](https://github.com/almulder/Sonos_Panel/issues/2))
+- Newly added Pandora favorites (the kind Sonos saves as a queue
+  container) failed to play with UPnP errors 714 / 701. They are now
+  loaded into the queue the way the official app does it, and Play is
+  retried while Pandora finishes loading
+- Tapping a favorite more than once while it was still loading could
+  start overlapping play requests and make it fail; requests for the
+  same room now run one at a time
+- Missing incompatible-file diagnostics: the log now says which track
+  Sonos refused and why, and warns when a speaker requests a file the
+  scanner marked incompatible
+- Log noise: the favorite service labels and the "Up Next" lookups were
+  printed over and over; they now only appear when something changes
+
 ## Quick start (Docker)
 
 ```bash

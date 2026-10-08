@@ -1072,6 +1072,15 @@ const SonosView = (() => {
     if (track && track.albumArtUrl) {
       artEl.style.backgroundImage = `url("${track.albumArtUrl}")`;
       artEl.style.backgroundSize = 'cover';
+      artEl.style.backgroundRepeat = '';
+      artEl.style.backgroundPosition = '';
+    } else if (track && track.playing && track.sourceService) {
+      // No song cover and no station artwork: show the service's own icon
+      // (centered, not cropped) rather than an empty square.
+      artEl.style.backgroundImage = `url("icons/${iconFilenameForService(track.sourceService)}.png"), url("icons/default.png")`;
+      artEl.style.backgroundSize = '55%';
+      artEl.style.backgroundRepeat = 'no-repeat';
+      artEl.style.backgroundPosition = 'center';
     } else {
       artEl.style.backgroundImage = '';
     }
@@ -1441,6 +1450,7 @@ const SonosView = (() => {
       groups.get(serviceLabel).forEach((item) => {
         const li = document.createElement('li');
         li.className = 'sourcepanel__item sourcepanel__item--grouped';
+        markInUse(li, item);
 
         const labelBlock = document.createElement('div');
         labelBlock.className = 'sourcepanel__labelblock';
@@ -1515,7 +1525,9 @@ const SonosView = (() => {
   function inUseRoomsForRow(li) {
     const d = li.dataset;
     let hits;
-    if (d.inuseUri) hits = sourcesInUse.filter((u) => u.uri && sameFavUri(u.uri, d.inuseUri));
+    if (d.inuseRoot === 'playlists') hits = sourcesInUse.filter((u) => u.playlistId);
+    else if (d.inusePlaylist) hits = sourcesInUse.filter((u) => u.playlistId === d.inusePlaylist);
+    else if (d.inuseUri) hits = sourcesInUse.filter((u) => u.uri && sameFavUri(u.uri, d.inuseUri));
     else if (d.inuseGroup && d.inuseSn !== undefined) hits = sourcesInUse.filter((u) => u.group === d.inuseGroup && String(u.sn) === d.inuseSn);
     else if (d.inuseGroup) hits = sourcesInUse.filter((u) => u.group === d.inuseGroup);
     else return null;
@@ -1540,7 +1552,11 @@ const SonosView = (() => {
 
   function markInUse(li, item) {
     if (!item) return;
-    if (item.isAccountEntry) {
+    if (item.isPlaylistRoot) {
+      li.dataset.inuseRoot = 'playlists';
+    } else if (item.id && /^SQ:\d+/.test(String(item.id)) && item.browsable) {
+      li.dataset.inusePlaylist = String(item.id);
+    } else if (item.isAccountEntry) {
       li.dataset.inuseGroup = item.serviceLabel || '';
       li.dataset.inuseSn = String(item.sn);
     } else if (item.id && String(item.id).startsWith('svc:')) {
@@ -2331,7 +2347,7 @@ const SonosView = (() => {
     // moves dots on rows already on screen.
     handleSourcesInUse(items) {
       sourcesInUse = Array.isArray(items) ? items : [];
-      sourcePanelItems.querySelectorAll('li[data-inuse-group], li[data-inuse-uri]').forEach((li) => {
+      sourcePanelItems.querySelectorAll('li[data-inuse-group], li[data-inuse-uri], li[data-inuse-root], li[data-inuse-playlist]').forEach((li) => {
         setRowDot(li, inUseRoomsForRow(li));
       });
     },

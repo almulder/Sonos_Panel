@@ -1169,6 +1169,21 @@ function secondsToHms(totalSeconds) {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+// Some sources (TuneIn and other raw streams) report a stream address or
+// file path in the title/artist/album slots instead of song info. That is
+// never useful on screen, so it's treated as "no info" and the source
+// name shows instead.
+function looksLikeJunkText(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return true;      // http://..., x-sonosapi-stream://...
+  if (/^x-[a-z0-9-]+:/i.test(t)) return true;                // x-rincon-..., x-sonos-http:...
+  if (/(^|[?&])(sid|flags|sn)=\d+/i.test(t)) return true;    // service query strings
+  if (/\s/.test(t)) return false;                            // real titles have spaces
+  if (t.length > 60) return true;                            // one very long "word"
+  return t.length > 25 && /[\/\?=&]/.test(t);               // path-like blob
+}
+
 async function getNowPlaying(roomName) {
   if (usingMock) {
     return (
@@ -1198,6 +1213,9 @@ async function getNowPlaying(roomName) {
       })
     ]);
     const { shuffle: shuffleOn, repeat: repeatMode } = decomposePlayMode(playMode);
+    if (looksLikeJunkText(track.title)) track.title = '';
+    if (looksLikeJunkText(track.artist)) track.artist = '';
+    if (looksLikeJunkText(track.album)) track.album = '';
 
     // Source line: identifies WHERE the audio is coming from, since
     // title/artist alone don't cover this -- confirmed useful in
@@ -1208,6 +1226,8 @@ async function getNowPlaying(roomName) {
     // source (not necessarily this room -- Line-In can be relayed from
     // elsewhere).
     let sourceLine = null;
+    let sourceService = null; // drives the last-resort artwork (the service icon)
+    let stationArtUrl = null; // the favorite's own artwork, if it has any
     let lineInDeviceName = null;
     const playlistContext = roomPlaylistContext.get(roomName);
     if (track.uri) {
@@ -1222,6 +1242,7 @@ async function getNowPlaying(roomName) {
         const serviceMap = await loadServiceNameMap();
         const trackServiceLabel = deriveServiceLabel(null, track.uri, serviceMap);
         sourceLine = `Playlist - ${playlistContext.title}${trackServiceLabel ? ` - ${trackServiceLabel}` : ''}`;
+        sourceService = trackServiceLabel || null;
       } else {
         const serviceMap = await loadServiceNameMap();
         const serviceLabel = deriveServiceLabel(track, track.uri, serviceMap);
@@ -1229,8 +1250,10 @@ async function getNowPlaying(roomName) {
         // "80s80s" have URIs that don't name a service at all, but are
         // still saved favorites.
         const fav = await resolveRoomFavorite(roomName);
+        sourceService = (fav && groupLabelFor(fav)) || serviceLabel || null;
         if (fav) {
           sourceLine = favoriteSourceLine(fav, favoritesCache.items || []);
+          stationArtUrl = fav.albumArtUrl || null;
         } else if (serviceLabel) {
           const stationToken = extractStationToken(track.uri);
           const stationName = await findStationNameFromFavorites(roomName, stationToken);
@@ -1318,7 +1341,10 @@ async function getNowPlaying(roomName) {
       artist: lineInDeviceName || track.artist || '',
       lineInDeviceName,
       album: track.album || '',
-      albumArtUrl: track.albumArtURL || null,
+      // Preference: the song's own cover, then the station/favorite's
+      // artwork; the client falls back to the service icon after that.
+      albumArtUrl: track.albumArtURL || stationArtUrl || null,
+      sourceService,
       playing: state === 'playing',
       position: track.position || 0,
       duration: track.duration || 0,
@@ -1993,8 +2019,14 @@ async function getSourcesInUse(force) {
     if (!coordRoom.playing) continue;
     seen.add(coord);
     const fav = await resolveRoomFavorite(coord);
-    if (!fav) continue;
     const rooms = [...lastRoomsByName.values()].filter((r) => (r.coordinator || r.name) === coord).map((r) => r.name);
+    if (!fav) {
+      // Playing a Sonos playlist from the panel? (context is stored under
+      // whichever room name started it, so check every room in the group)
+      const ctx = rooms.map((r) => roomPlaylistContext.get(r)).find((c) => c && !c.local);
+      if (ctx) items.push({ playlistId: ctx.id, group: 'Playlists', rooms });
+      continue;
+    }
     items.push({ uri: fav.uri, sid: fav.sid || null, sn: fav.sn, group: groupLabelFor(fav), rooms });
   }
   sourcesInUseCache = { items, at: Date.now() };
