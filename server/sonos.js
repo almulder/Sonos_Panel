@@ -1978,12 +1978,12 @@ async function resolveRoomFavorite(roomName) {
         if (byTitle) return byTitle;
       }
     }
+    if (!transportUri.startsWith('x-rincon-queue:')) {
+      roomFavoriteContext.delete(coordName); // left queue mode -- whatever we remembered is over
+    }
     if (transportUri.startsWith('x-rincon-queue:')) {
       const ctx = roomFavoriteContext.get(coordName);
       if (!ctx) return null;
-      const pos = await withTimeout(device.avTransportService().GetPositionInfo(), DEVICE_CALL_TIMEOUT_MS, `GetPositionInfo(${coordName})`);
-      const trackSid = (String(pos.TrackURI || '').match(/[?&]sid=(\d+)/) || [])[1];
-      if (ctx.sid && trackSid && ctx.sid !== trackSid) return null; // queue was replaced by something else
       return favorites.find((f) => f.uri && sameFavoriteUri(f.uri, ctx.uri)) || null;
     }
   } catch (err) {
@@ -2007,6 +2007,19 @@ function favoriteSourceLine(fav, favorites) {
 // Every coordinator that is currently playing, with the favorite it is
 // on. Briefly cached -- the browse screens ask on every open.
 let sourcesInUseCache = { items: [], at: 0 };
+const unidentifiedLogged = new Map(); // room -> last message, so each case is logged once
+async function logUnidentifiedSource(coord) {
+  try {
+    const device = findDevice(coord);
+    if (!device) return;
+    const media = await device.avTransportService().GetMediaInfo();
+    const msg = `${coord} is playing but the panel can't tell which favorite/playlist it is (transport: ${String(media.CurrentURI || '').slice(0, 90)}; started from the panel: ${roomFavoriteContext.has(coord) ? 'favorite' : 'no'})`;
+    if (unidentifiedLogged.get(coord) !== msg) {
+      unidentifiedLogged.set(coord, msg);
+      debugLog.info('sonos', `in-use: ${msg}`);
+    }
+  } catch (err) { /* diagnostics only */ }
+}
 async function getSourcesInUse(force) {
   if (usingMock) return [];
   if (!force && Date.now() - sourcesInUseCache.at < 4000) return sourcesInUseCache.items;
@@ -2020,6 +2033,9 @@ async function getSourcesInUse(force) {
     seen.add(coord);
     const fav = await resolveRoomFavorite(coord);
     const rooms = [...lastRoomsByName.values()].filter((r) => (r.coordinator || r.name) === coord).map((r) => r.name);
+    if (!fav && !rooms.some((r) => roomPlaylistContext.has(r))) {
+      logUnidentifiedSource(coord);
+    }
     if (!fav) {
       // Playing a Sonos playlist from the panel? (context is stored under
       // whichever room name started it, so check every room in the group)

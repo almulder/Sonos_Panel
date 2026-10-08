@@ -1460,6 +1460,75 @@ const SonosView = (() => {
         labelBlock.appendChild(label);
         li.appendChild(labelBlock);
 
+        // Rename / delete live on the playlist's own row (same pencil
+        // pattern as renaming a service account) instead of at the
+        // bottom of the playlist. Both stay behind the passcode lock.
+        const openPlaylistRoot = () => openGroup({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true });
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'sourcepanel__removebtn';
+        renameBtn.textContent = '\u270F\uFE0F';
+        renameBtn.setAttribute('aria-label', `Rename ${item.title}`);
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'sourcepanel__removebtn';
+        deleteBtn.textContent = '\u{1F5D1}\uFE0F';
+        deleteBtn.setAttribute('aria-label', `Delete ${item.title}`);
+
+        renameBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          window.PasscodeLock.require(() => {
+            // Inline swap: the name becomes an input + Save/Cancel.
+            labelBlock.innerHTML = '';
+            li.classList.add('sourcepanel__renamerow');
+            renameBtn.style.display = 'none';
+            deleteBtn.style.display = 'none';
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'sourcepanel__renameinput';
+            input.value = item.title;
+            input.addEventListener('click', (e2) => e2.stopPropagation());
+            const save = document.createElement('button');
+            save.className = 'sourcepanel__actionbtn sourcepanel__actionbtn--primary';
+            save.textContent = 'Save';
+            save.addEventListener('click', async (e2) => {
+              e2.stopPropagation();
+              const next = input.value.trim();
+              if (!next) return;
+              if (next === item.title) { await openPlaylistRoot(); return; }
+              save.textContent = '\u2026';
+              await api(`/api/sonos/playlists/${encodeURIComponent(item.id)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: next, currentTitle: item.title })
+              });
+              await openPlaylistRoot();
+            });
+            const cancel = document.createElement('button');
+            cancel.className = 'sourcepanel__actionbtn';
+            cancel.textContent = 'Cancel';
+            cancel.addEventListener('click', async (e2) => {
+              e2.stopPropagation();
+              await openPlaylistRoot();
+            });
+            labelBlock.appendChild(input);
+            labelBlock.appendChild(save);
+            labelBlock.appendChild(cancel);
+            input.focus();
+            input.select();
+          });
+        });
+
+        deleteBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          window.PasscodeLock.require(() => {
+            showConfirm(`Delete the playlist "${item.title}"?`, async () => {
+              await api(`/api/sonos/playlists/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+              await openPlaylistRoot();
+            });
+          });
+        });
+        li.appendChild(renameBtn);
+        li.appendChild(deleteBtn);
+
         const chevron = document.createElement('span');
         chevron.className = 'sourcepanel__chevron';
         chevron.textContent = '\u203A';
@@ -2051,8 +2120,6 @@ const SonosView = (() => {
     sourcePanelItems.innerHTML = '';
     if (items.length === 0) {
       sourcePanelItems.innerHTML = `<li class="sourcepanel__loading">${emptyMessage}</li>`;
-      // Even an empty playlist should still be deletable.
-      appendPlaylistDeleteRow(playlistContainerId, playlistTitle);
       return;
     }
     items.forEach((item, index) => {
@@ -2239,71 +2306,6 @@ const SonosView = (() => {
       sourcePanelItems.appendChild(li);
     });
 
-    appendPlaylistRenameRow(playlistContainerId, playlistTitle);
-    appendPlaylistDeleteRow(playlistContainerId, playlistTitle);
-  }
-
-  function appendPlaylistRenameRow(playlistContainerId, playlistTitle) {
-    if (!playlistContainerId || !String(playlistContainerId).startsWith('SQ:')) return;
-    const li = document.createElement('li');
-    li.className = 'sourcepanel__item sourcepanel__deleterow';
-    li.textContent = `\u270F\uFE0F  Rename "${playlistTitle}"`;
-    li.addEventListener('click', () => window.PasscodeLock.require(() => {
-      // Inline swap: the row becomes an input + Save/Cancel, no overlay.
-      li.textContent = '';
-      li.classList.add('sourcepanel__renamerow');
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.value = playlistTitle;
-      input.className = 'sourcepanel__renameinput';
-      const save = document.createElement('button');
-      save.className = 'sourcepanel__actionbtn sourcepanel__actionbtn--primary';
-      save.textContent = 'Save';
-      save.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const next = input.value.trim();
-        if (!next || next === playlistTitle) return;
-        save.textContent = '\u2026';
-        await api(`/api/sonos/playlists/${encodeURIComponent(playlistContainerId)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: next, currentTitle: playlistTitle })
-        });
-        await openGroup({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true });
-      });
-      const cancel = document.createElement('button');
-      cancel.className = 'sourcepanel__actionbtn';
-      cancel.textContent = 'Cancel';
-      cancel.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const data = await api(
-          `/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(playlistContainerId)}`
-        );
-        renderLeafItems(data.items || [], 'This playlist is empty.', playlistContainerId, playlistTitle);
-      });
-      li.appendChild(input);
-      li.appendChild(save);
-      li.appendChild(cancel);
-      input.focus();
-      input.select();
-    }));
-    sourcePanelItems.appendChild(li);
-  }
-
-  function appendPlaylistDeleteRow(playlistContainerId, playlistTitle) {
-    if (!playlistContainerId || !String(playlistContainerId).startsWith('SQ:')) return;
-    const li = document.createElement('li');
-    li.className = 'sourcepanel__item sourcepanel__deleterow';
-    li.textContent = `\u{1F5D1}\uFE0F  Delete "${playlistTitle}"`;
-    li.addEventListener('click', () => window.PasscodeLock.require(() => {
-      showConfirm(`Delete the playlist "${playlistTitle}"?`, async () => {
-        await api(`/api/sonos/playlists/${encodeURIComponent(playlistContainerId)}`, { method: 'DELETE' });
-        // Back out to the Playlists list -- what we were looking at no
-        // longer exists.
-        await openGroup({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true });
-      });
-    }));
-    sourcePanelItems.appendChild(li);
   }
 
   sourceBackBtn.addEventListener('click', () => {

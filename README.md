@@ -103,6 +103,11 @@ not a panel limitation.
 - **Cleaner now-playing info**: when a source (TuneIn and other raw
   streams) reports a long stream address or file path instead of real
   song info, it's hidden and the source name shows instead
+- **Rename and delete playlists from the list**: the Playlists screen
+  now has a pencil (rename) and a trash can (delete) on each
+  playlist's own row, like renaming a service account, instead of rows
+  at the bottom of the playlist. Still behind the passcode lock when
+  one is set
 - **Incompatible-file protection during playback**: files the scanner
   marked incompatible are left out when a playlist or queue is built,
   skipped over with next/previous, and removed from the live queue
