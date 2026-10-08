@@ -103,6 +103,15 @@ not a panel limitation.
 - **Cleaner now-playing info**: when a source (TuneIn and other raw
   streams) reports a long stream address or file path instead of real
   song info, it's hidden and the source name shows instead
+- **Incompatible-file protection during playback**: files the scanner
+  marked incompatible are left out when a playlist or queue is built,
+  skipped over with next/previous, and removed from the live queue
+  (never from the saved playlist) when they come up next, so one
+  unplayable file no longer stops everything. Each skip is written to
+  the log with the reason
+
+### Updated: v0.16.1 - Oct 08, 2026
+
 - **Rename and delete playlists from the list**: each playlist on the
   Playlists screen has a pencil, like renaming a service account.
   Editing offers Save, Cancel and Delete, and Delete asks "Are you sure
@@ -113,12 +122,6 @@ not a panel limitation.
   with fresh files (same as Shift+F5). It never reloads by itself, so
   nobody loses their place. It relies on the version number in
   `package.json`, so bump it with each release
-- **Incompatible-file protection during playback**: files the scanner
-  marked incompatible are left out when a playlist or queue is built,
-  skipped over with next/previous, and removed from the live queue
-  (never from the saved playlist) when they come up next, so one
-  unplayable file no longer stops everything. Each skip is written to
-  the log with the reason
 
 ## Bug fixes
 
