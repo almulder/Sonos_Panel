@@ -846,6 +846,12 @@ async function setGroupVolume(roomName, volume) {
 // instead of just the track's own service. Cleared whenever a
 // different kind of playback starts in that room.
 const roomPlaylistContext = new Map();
+// Which favorite this panel last started on a room (keyed by the
+// COORDINATOR's name): {uri, sid}. Queue-backed favorites (Pandora
+// containers) play from the queue, so the transport URI no longer says
+// which favorite it was -- this remembers it, and is only trusted while
+// the room is still on a queue from the same service.
+const roomFavoriteContext = new Map();
 
 // Same idea for the Local Music Library: playTracksAsQueue remembers
 // what it queued (uri -> {title, artist, album, albumArtUrl}) so
@@ -1220,9 +1226,14 @@ async function getNowPlaying(roomName) {
         const serviceMap = await loadServiceNameMap();
         const serviceLabel = deriveServiceLabel(track, track.uri, serviceMap);
         if (serviceLabel) {
-          const stationToken = extractStationToken(track.uri);
-          const stationName = await findStationNameFromFavorites(roomName, stationToken);
-          sourceLine = stationName ? `${serviceLabel} - ${stationName}` : serviceLabel;
+          const fav = await resolveRoomFavorite(roomName);
+          if (fav) {
+            sourceLine = favoriteSourceLine(fav, favoritesCache.items || []);
+          } else {
+            const stationToken = extractStationToken(track.uri);
+            const stationName = await findStationNameFromFavorites(roomName, stationToken);
+            sourceLine = stationName ? `${serviceLabel} - ${stationName}` : serviceLabel;
+          }
         }
       }
     }
@@ -1886,6 +1897,103 @@ async function findStationNameFromFavorites(roomName, stationToken) {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------
+// Which favorite is a room playing? Used for the source line ("Pandora -
+// Juicy M Radio - Albert's Favorites") and the in-use markers.
+// ---------------------------------------------------------------------
+function uriIdentity(uri) {
+  const s = String(uri || '');
+  let base = s.split('?')[0].replace(/^[a-z0-9-]+:/i, '');
+  try { base = decodeURIComponent(base); } catch (err) { /* keep raw */ }
+  return {
+    base: base.toLowerCase(),
+    sid: (s.match(/[?&]sid=(\d+)/) || [])[1] || null,
+    sn: (s.match(/[?&]sn=(\d+)/) || [])[1] || null
+  };
+}
+
+function sameFavoriteUri(a, b) {
+  const x = uriIdentity(a);
+  const y = uriIdentity(b);
+  if (!x.base || x.base !== y.base) return false;
+  if (x.sid && y.sid && x.sid !== y.sid) return false;
+  return !x.sn || !y.sn || x.sn === y.sn; // same station on two logins = two different favorites
+}
+
+function isMultiAccountGroup(favorites, groupTitle) {
+  const sns = new Set(favorites.filter((f) => groupLabelFor(f) === groupTitle && f.sn !== undefined).map((f) => f.sn));
+  return sns.size > 1;
+}
+
+// Returns the favorites-list entry the room's coordinator is playing, or
+// null. Radio/station favorites match the transport URI directly;
+// queue-backed favorites fall back to the remembered context.
+async function resolveRoomFavorite(roomName) {
+  const coordName = coordinatorNameFor(roomName);
+  const device = findDevice(coordName);
+  if (!device) return null;
+  const favorites = favoritesCache.items || [];
+  if (favorites.length === 0) return null;
+  try {
+    const media = await withTimeout(device.avTransportService().GetMediaInfo(), DEVICE_CALL_TIMEOUT_MS, `GetMediaInfo(${coordName})`);
+    const transportUri = media && media.CurrentURI;
+    if (!transportUri) return null;
+    const direct = favorites.find((f) => f.uri && sameFavoriteUri(f.uri, transportUri));
+    if (direct) return direct;
+    if (transportUri.startsWith('x-rincon-queue:')) {
+      const ctx = roomFavoriteContext.get(coordName);
+      if (!ctx) return null;
+      const pos = await withTimeout(device.avTransportService().GetPositionInfo(), DEVICE_CALL_TIMEOUT_MS, `GetPositionInfo(${coordName})`);
+      const trackSid = (String(pos.TrackURI || '').match(/[?&]sid=(\d+)/) || [])[1];
+      if (ctx.sid && trackSid && ctx.sid !== trackSid) return null; // queue was replaced by something else
+      return favorites.find((f) => f.uri && sameFavoriteUri(f.uri, ctx.uri)) || null;
+    }
+  } catch (err) {
+    debugLog.warn('sonos', `resolveRoomFavorite(${roomName}) failed: ${err.message}`);
+  }
+  return null;
+}
+
+// "Service - Favorite", plus " - Account" when the service has more than
+// one login in this household.
+function favoriteSourceLine(fav, favorites) {
+  const group = groupLabelFor(fav);
+  let line = `${group} - ${fav.title}`;
+  if (fav.sid && fav.sn !== undefined && isMultiAccountGroup(favorites, group)) {
+    line += ` - ${accountLabelFor(fav.sid, fav.sn)}`;
+  }
+  return line;
+}
+
+// Every coordinator that is currently playing, with the favorite it is
+// on. Briefly cached -- the browse screens ask on every open.
+let sourcesInUseCache = { items: [], at: 0 };
+async function getSourcesInUse() {
+  if (usingMock) return [];
+  if (Date.now() - sourcesInUseCache.at < 4000) return sourcesInUseCache.items;
+  const items = [];
+  const seen = new Set();
+  for (const room of lastRoomsByName.values()) {
+    const coord = room.coordinator || room.name;
+    if (seen.has(coord)) continue;
+    const coordRoom = lastRoomsByName.get(coord) || room;
+    if (!coordRoom.playing) continue;
+    seen.add(coord);
+    const fav = await resolveRoomFavorite(coord);
+    if (!fav) continue;
+    const rooms = [...lastRoomsByName.values()].filter((r) => (r.coordinator || r.name) === coord).map((r) => r.name);
+    items.push({ uri: fav.uri, sid: fav.sid || null, sn: fav.sn, group: groupLabelFor(fav), rooms });
+  }
+  sourcesInUseCache = { items, at: Date.now() };
+  return items;
+}
+
+function inUseRoomsFor(inUse, predicate) {
+  const rooms = inUse.filter(predicate).flatMap((u) => u.rooms);
+  return rooms.length ? [...new Set(rooms)] : null;
+}
+
 // description field when present (confirmed real-world example: "Pandora
 // Station"), otherwise falls back to pulling the sid= service ID out of
 // a stream URI and looking it up in the catalog map. Used both when
@@ -2078,6 +2186,7 @@ async function playItemNow(roomName, uri, metadata) {
   if (!device) return;
   roomPlaylistContext.delete(roomName);
   roomLocalQueueContext.delete(roomName);
+  roomFavoriteContext.set(coordinatorNameFor(roomName), { uri, sid: (String(uri || '').match(/[?&]sid=(\d+)/) || [])[1] || null });
   debugLog.info('sonos', `playItem(${roomName}): ${metadata ? 'using item metadata' : 'no metadata available, falling back to bare URI'}`);
   await guarded(`playItem(${roomName})`, async () => {
     // Confirmed via real testing: calling setAVTransportURI right after
@@ -2173,6 +2282,7 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
   const device = findDevice(roomName);
   if (!device) return;
   roomLocalQueueContext.delete(roomName);
+  roomFavoriteContext.delete(coordinatorNameFor(roomName));
   await guarded(`playPlaylistTrack(${roomName})`, async () => {
     const tracks = await browseContainer(roomName, playlistContainerId);
     const playableTracks = tracks.filter((t) => t.uri && !skipIfIncompatible(`playPlaylistTrack(${roomName})`, t));
@@ -2468,6 +2578,7 @@ async function playTracksAsQueue(roomName, tracks) {
   const device = findDevice(roomName);
   if (!device) throw new Error(`Room not found: ${roomName}`);
   roomPlaylistContext.delete(roomName);
+  roomFavoriteContext.delete(coordinatorNameFor(roomName));
   await guarded(`playTracksAsQueue(${roomName})`, async () => {
     await device.flush();
     let queued = 0;
@@ -2684,6 +2795,11 @@ async function getSourceGroups(roomName) {
     browsable: true
   }));
   groups.sort((a, b) => a.title.localeCompare(b.title));
+  const inUse = await getSourcesInUse().catch(() => []);
+  groups.forEach((g) => {
+    const rooms = inUseRoomsFor(inUse, (u) => u.group === g.title);
+    if (rooms) { g.inUse = true; g.inUseRooms = rooms; }
+  });
   groups.push({ id: 'linein', title: 'Line-In', browsable: true, isLineInRoot: true });
 
   // Playlists only shown when they actually exist, and pinned to the
@@ -2783,12 +2899,16 @@ async function getFavoritesByGroup(roomName, groupLabel, sn) {
   // ("Albert's Playlists" / "Family's Playlists"), each browsing to
   // that account's own favorites -- so nobody stops anyone else's
   // stream by grabbing a station from the wrong login.
+  const inUse = await getSourcesInUse().catch(() => []);
   if (sns.length > 1 && sn === undefined) {
     return sns
       .sort((a, b) => Number(a) - Number(b))
       .map((serial) => {
         const mine = filtered.filter((i) => i.sn === serial);
+        const rooms = inUseRoomsFor(inUse, (u) => u.group === groupLabel && u.sn === serial);
         return {
+          inUse: !!rooms,
+          inUseRooms: rooms || undefined,
           id: `fvacct:${mine[0].sid}:${serial}`,
           title: accountLabelFor(mine[0].sid, serial),
           browsable: true,
@@ -2799,7 +2919,10 @@ async function getFavoritesByGroup(roomName, groupLabel, sn) {
         };
       });
   }
-  const items = sn === undefined ? filtered : filtered.filter((i) => i.sn === String(sn));
+  const items = (sn === undefined ? filtered : filtered.filter((i) => i.sn === String(sn))).map((i) => {
+    const rooms = inUseRoomsFor(inUse, (u) => u.uri && i.uri && sameFavoriteUri(u.uri, i.uri));
+    return rooms ? { ...i, inUse: true, inUseRooms: rooms } : i;
+  });
   items.sort((a, b) => a.title.localeCompare(b.title));
   return items;
 }

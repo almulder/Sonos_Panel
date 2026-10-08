@@ -1483,6 +1483,19 @@ const SonosView = (() => {
     }, 3500);
   }
 
+  // Amber dot (same look as the playing dot on room rows) in front of any
+  // source, account or favorite a room is playing right now. Added right
+  // after the row is created so it always sits first.
+  function markInUse(li, item) {
+    if (!item || !item.inUse) return;
+    const dot = document.createElement('span');
+    dot.className = 'roomrow__playing-dot';
+    const rooms = (item.inUseRooms || []).join(', ');
+    dot.title = rooms ? `Playing now in ${rooms}` : 'Playing now';
+    dot.setAttribute('aria-label', dot.title);
+    li.appendChild(dot);
+  }
+
   function renderTopLevel(groups) {
     sourcePanelItems.innerHTML = '';
     if (groups.length === 0) {
@@ -1492,6 +1505,7 @@ const SonosView = (() => {
     groups.forEach((group) => {
       const li = document.createElement('li');
       li.className = 'sourcepanel__item';
+      markInUse(li, group);
 
       const icon = buildSourceIcon(group);
       li.appendChild(icon);
@@ -1968,6 +1982,7 @@ const SonosView = (() => {
     items.forEach((item, index) => {
       const li = document.createElement('li');
       li.className = 'sourcepanel__item';
+      markInUse(li, item);
 
       // Account entry ("Albert's Playlists") -- the user list a
       // multi-login service opens to. Tapping drills to that account's
