@@ -790,7 +790,7 @@ async function main() {
 
   let lastInUseJson = null;
   wss.on('connection', (ws) => {
-    ws.send(JSON.stringify({ type: 'hello', sonosMock: sonos.isMock() }));
+    ws.send(JSON.stringify({ type: 'hello', sonosMock: sonos.isMock(), version: PKG_VERSION }));
     if (lastInUseJson) ws.send(JSON.stringify({ type: 'sonos:sources-inuse', items: JSON.parse(lastInUseJson) }));
   });
 

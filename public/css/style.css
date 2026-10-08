@@ -2175,3 +2175,21 @@ button:focus-visible,
 }
 @keyframes pullspin { to { rotate: 360deg; } }
 .pullrefresh.is-loading { animation: pullspin 0.8s linear infinite; }
+
+/* "New version available" bar -- shown when the server restarts on a
+   newer version while this screen was already open. */
+.update-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  padding: 10px 16px;
+  border: 0;
+  background: var(--amber);
+  color: #1a1305;
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}

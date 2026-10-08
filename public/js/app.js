@@ -60,6 +60,40 @@
     await SonosView.setFocusedRoomMute(muted);
   });
 
+  // ---------------- New-version banner ----------------
+  // The server reports its version each time a screen (re)connects. A
+  // container update drops every socket, so an already-open screen sees
+  // the new number on reconnect and offers a reload. Never reloads by
+  // itself -- that could wipe what someone is in the middle of.
+  let firstSeenVersion = null;
+
+  function showUpdateBanner(version) {
+    if (document.getElementById('updateBanner')) return;
+    const bar = document.createElement('button');
+    bar.id = 'updateBanner';
+    bar.className = 'update-banner';
+    bar.type = 'button';
+    bar.textContent = `A new version (v${version}) is available \u2014 tap to reload`;
+    bar.addEventListener('click', async () => {
+      bar.textContent = 'Reloading\u2026';
+      // Same effect as Shift+F5: re-download every file the page uses
+      // (bypassing the browser cache), then reload.
+      try {
+        const urls = [window.location.href, ...[...document.querySelectorAll('script[src], link[href]')]
+          .map((el) => el.src || el.href)];
+        await Promise.all(urls.map((u) => fetch(u, { cache: 'reload' }).catch(() => {})));
+      } catch (err) { /* reload anyway */ }
+      window.location.reload();
+    });
+    document.body.appendChild(bar);
+  }
+
+  function handleHelloVersion(version) {
+    if (!version) return;
+    if (firstSeenVersion === null) firstSeenVersion = version;
+    else if (version !== firstSeenVersion) showUpdateBanner(version);
+  }
+
   // ---------------- WebSocket live updates ----------------
 
   function connectSocket() {
@@ -72,7 +106,9 @@
 
     ws.addEventListener('message', (event) => {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'sonos:rooms') {
+      if (msg.type === 'hello') {
+        handleHelloVersion(msg.version);
+      } else if (msg.type === 'sonos:rooms') {
         SonosView.refreshFromSocket(msg.rooms);
       } else if (msg.type === 'sonos:nowplaying-changed') {
         SonosView.handleNowPlayingChanged(msg.room);

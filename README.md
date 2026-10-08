@@ -108,6 +108,11 @@ not a panel limitation.
   Editing offers Save, Cancel and Delete, and Delete asks "Are you sure
   you want to delete ...?" with Yes / No. Still behind the passcode
   lock when one is set
+- **"New version available" banner**: after the container is updated,
+  screens that were already open show an amber bar -- tap it to reload
+  with fresh files (same as Shift+F5). It never reloads by itself, so
+  nobody loses their place. It relies on the version number in
+  `package.json`, so bump it with each release
 - **Incompatible-file protection during playback**: files the scanner
   marked incompatible are left out when a playlist or queue is built,
   skipped over with next/previous, and removed from the live queue
