@@ -2240,6 +2240,30 @@ function playItem(roomName, uri, metadata) {
   return run;
 }
 
+// flush -> queue(uri + resMD) -> selectQueue -> play. Used for container
+// favorites (Sonos answers UPnP 714 if those are set as the transport URI
+// directly) and as the fallback for service items refused as a direct URI.
+// Pandora containers expand into the queue asynchronously, and Play answers
+// 701 (transition not available) until the speaker has finished loading --
+// so Play is retried with a growing pause instead of failing on attempt 1.
+async function playViaQueue(device, roomName, uri, metadata) {
+  await device.flush();
+  await device.queue({ uri, metadata });
+  await device.selectQueue();
+  let lastErr;
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+    try {
+      await device.play();
+      return;
+    } catch (err) {
+      lastErr = err;
+      debugLog.warn('sonos', `playItem(${roomName}): Play on queued item failed (attempt ${attempt}/6): ${err.message.slice(0, 120)}`);
+    }
+  }
+  throw lastErr;
+}
+
 async function playItemNow(roomName, uri, metadata) {
   if (usingMock) return;
   const device = findDevice(roomName);
@@ -2265,25 +2289,8 @@ async function playItemNow(roomName, uri, metadata) {
     // app loads them into the queue and plays the queue instead, so do
     // the same: flush -> queue(uri + resMD) -> selectQueue -> play.
     if (metadata && /^x-rincon-(cpcontainer|playlist):/i.test(uri)) {
-      await device.flush();
-      await device.queue({ uri, metadata });
-      await device.selectQueue();
-      // Pandora containers expand into the queue asynchronously, and Play
-      // answers 701 (transition not available) until the speaker has
-      // finished loading -- so retry with a growing pause instead of
-      // failing on the first attempt.
-      let lastErr;
-      for (let attempt = 1; attempt <= 6; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
-        try {
-          await device.play();
-          return;
-        } catch (err) {
-          lastErr = err;
-          debugLog.warn('sonos', `playItem(${roomName}): Play on queued container failed (attempt ${attempt}/6): ${err.message.slice(0, 120)}`);
-        }
-      }
-      throw lastErr;
+      await playViaQueue(device, roomName, uri, metadata);
+      return;
     }
 
     const setUri = () => (metadata ? device.setAVTransportURI({ uri, metadata }) : device.setAVTransportURI(uri));
@@ -2292,7 +2299,17 @@ async function playItemNow(roomName, uri, metadata) {
     } catch (err) {
       debugLog.warn('sonos', `playItem(${roomName}): setAVTransportURI failed (${err.message}), retrying once after a longer pause`);
       await new Promise((resolve) => setTimeout(resolve, 800));
-      await setUri();
+      try {
+        await setUri();
+      } catch (err2) {
+        // Some on-demand service items (e.g. a Plex track) are refused as
+        // a direct transport URI (UPnP 714/800) but play fine from the
+        // queue, which is how the official app plays them.
+        if (!metadata) throw err2;
+        debugLog.warn('sonos', `playItem(${roomName}): direct play refused again (${err2.message.slice(0, 100)}), trying it through the queue instead`);
+        await playViaQueue(device, roomName, uri, metadata);
+        return;
+      }
     }
     // setAVTransportURI alone doesn't guarantee playback actually
     // starts -- confirmed in practice (selecting a favorite did

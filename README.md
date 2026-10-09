@@ -125,6 +125,19 @@ not a panel limitation.
 
 ## Bug fixes
 
+### Updated: v0.16.2 - Oct 09, 2026
+
+- **A failed play no longer throws you back to the home screen.** When
+  Sonos refused a track or station, the panel treated it as a success
+  and jumped back to the Sources list with nothing playing and no
+  explanation. It now stays on the screen you were on and shows a
+  message with the error Sonos reported. Reported by
+  [@Valdean3](https://github.com/Valdean3)
+  ([#2](https://github.com/almulder/Sonos_Panel/issues/2))
+- Streaming-service items that Sonos refuses as a direct play (a Plex
+  track answered with UPnP error 800, for example) are now retried
+  through the queue, the way the official app plays them
+
 ### Updated: v0.16.0 - Oct 08, 2026
 
 With thanks to everyone who reported them:

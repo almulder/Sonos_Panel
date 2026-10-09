@@ -247,6 +247,33 @@ const SonosView = (() => {
     return res.json();
   }
 
+  // Starts playback and reports whether it worked. api() hands back the
+  // error body of a failed request as if it were a success, which used to
+  // make every failed play look fine -- the screen jumped back to the
+  // Sources home and nothing played, with no hint why. Callers stay where
+  // they are and show a message instead.
+  async function postPlay(kind, body, title) {
+    let data = null;
+    let ok = false;
+    try {
+      const res = await fetch(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/${kind}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      data = await res.json().catch(() => null);
+      ok = res.ok && !(data && data.error);
+    } catch (err) {
+      data = { error: err.message };
+    }
+    if (ok) return true;
+    const code = ((data && data.error) || '').match(/errorCode>(\d+)</);
+    showPreviewMessage(
+      `Couldn't play "${title}"${code ? ` -- Sonos reported error ${code[1]}` : ''}. Check the log for details.`
+    );
+    return false;
+  }
+
   function withClientTimeout(promise, ms) {
     return Promise.race([
       promise,
@@ -2077,17 +2104,9 @@ const SonosView = (() => {
           // single track.
           const queueWholeContainer = state.total > 0 && state.total <= 200;
           if (queueWholeContainer) {
-            await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-playlist-track`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ playlistId: state.containerId, playlistTitle: state.title, uri: item.uri })
-            });
+            if (!(await postPlay('play-playlist-track', { playlistId: state.containerId, playlistTitle: state.title, uri: item.uri }, item.title))) return;
           } else {
-            await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-item`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null })
-            });
+            if (!(await postPlay('play-item', { uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null }, item.title))) return;
           }
           await openSourceGroups();
           setTimeout(refreshNowPlaying, 800);
@@ -2257,19 +2276,11 @@ const SonosView = (() => {
           // playing it standalone with no next/previous context
           // (confirmed via real testing: that left Sonos with nothing
           // to skip to at all).
-          await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-playlist-track`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ playlistId: playlistContainerId, playlistTitle, uri: item.uri })
-          });
+          if (!(await postPlay('play-playlist-track', { playlistId: playlistContainerId, playlistTitle, uri: item.uri }, item.title))) return;
           await openSourceGroups();
           setTimeout(refreshNowPlaying, 800);
         } else if (item.uri) {
-          await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-item`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null })
-          });
+          if (!(await postPlay('play-item', { uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null }, item.title))) return;
           await openSourceGroups();
           setTimeout(refreshNowPlaying, 800);
         } else {
