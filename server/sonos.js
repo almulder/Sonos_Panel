@@ -720,15 +720,26 @@ async function getDeviceUUID(roomName) {
   return null;
 }
 
+// Line-In now-playing resolved this with a full getAllGroups topology
+// call on every lookup. Speaker UUIDs never change and names rarely do,
+// so the answer is kept for a minute (a miss always asks again).
+const UUID_NAME_CACHE_MS = 60 * 1000;
+const uuidNameCache = new Map(); // uuid -> { name, at }
 async function getRoomNameByUUID(uuid) {
+  const cached = uuidNameCache.get(uuid);
+  if (cached && Date.now() - cached.at < UUID_NAME_CACHE_MS) return cached.name;
   const anyDevice = devicesByName.values().next().value;
   if (!anyDevice) return null;
   const groups = await anyDevice.getAllGroups();
+  const now = Date.now();
+  let found = null;
   for (const zone of groups) {
-    const member = zone.ZoneGroupMember.find((m) => m.UUID === uuid);
-    if (member) return member.ZoneName;
+    for (const m of zone.ZoneGroupMember) {
+      uuidNameCache.set(m.UUID, { name: m.ZoneName, at: now });
+      if (m.UUID === uuid) found = m.ZoneName;
+    }
   }
-  return null;
+  return found;
 }
 
 async function getRooms() {
@@ -1359,8 +1370,13 @@ async function getNowPlaying(roomName) {
     if (shuffleAvailable && SONOS_SYSTEM !== 's1') {
       try {
         const coordName = coordinatorNameFor(roomName);
-        const pos = await device.avTransportService().GetPositionInfo();
-        const trackNo = parseInt(pos.Track, 10) || 0;
+        // currentTrack() above already was a GetPositionInfo and carries
+        // the queue position -- only ask again if it somehow didn't.
+        let trackNo = parseInt(track.queuePosition, 10) || 0;
+        if (!trackNo) {
+          const pos = await device.avTransportService().GetPositionInfo();
+          trackNo = parseInt(pos.Track, 10) || 0;
+        }
         if (trackNo > 0) {
           const { items } = await browseContainerPaged(coordName, 'Q:0', trackNo, 1);
           if (items && items[0] && items[0].title) {
@@ -1412,8 +1428,15 @@ const NOW_PLAYING_CACHE_MS = 500;
 const nowPlayingShared = new Map(); // lowercased room -> { promise, pending, at }
 
 function invalidateNowPlaying(roomName) {
-  if (roomName == null) nowPlayingShared.clear();
-  else nowPlayingShared.delete(String(roomName).toLowerCase());
+  if (roomName == null) {
+    nowPlayingShared.clear();
+    mediaInfoShared.clear();
+  } else {
+    nowPlayingShared.delete(String(roomName).toLowerCase());
+    // Media info is per coordinator; a member's event can stand for it.
+    mediaInfoShared.delete(String(roomName).toLowerCase());
+    mediaInfoShared.delete(String(coordinatorNameFor(roomName)).toLowerCase());
+  }
 }
 
 function getNowPlayingShared(roomName) {
@@ -1469,20 +1492,26 @@ async function next(roomName) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
-  await guarded(`next(${roomName})`, async () => {
-    await device.next();
-    await skipPastIncompatible(roomName, device, 'next');
-  });
+  await guarded(`next(${roomName})`, () => device.next());
+  skipPastIncompatibleInBackground(roomName, device, 'next');
+}
+
+// The incompatible-track check waits 600 ms and asks the speaker what it
+// landed on -- it used to run BEFORE the tap got its answer, adding ~0.7 s
+// to every skip. It only matters for Local Music Library files, so it now
+// runs after the response, and not at all when that library is off.
+function skipPastIncompatibleInBackground(roomName, device, direction) {
+  if (!localLibrary.isEnabled()) return;
+  skipPastIncompatible(roomName, device, direction)
+    .catch((err) => debugLog.warn('sonos', `${direction}(${roomName}): incompatible-track check failed: ${err.message}`));
 }
 
 async function previous(roomName) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
-  await guarded(`previous(${roomName})`, async () => {
-    await device.previous();
-    await skipPastIncompatible(roomName, device, 'previous');
-  });
+  await guarded(`previous(${roomName})`, () => device.previous());
+  skipPastIncompatibleInBackground(roomName, device, 'previous');
 }
 
 async function setVolume(roomName, vol) {
@@ -2043,7 +2072,7 @@ async function resolveRoomFavorite(roomName) {
   const favorites = favoritesCache.items || [];
   if (favorites.length === 0) return null;
   try {
-    const media = await withTimeout(device.avTransportService().GetMediaInfo(), DEVICE_CALL_TIMEOUT_MS, `GetMediaInfo(${coordName})`);
+    const media = await getMediaInfoShared(coordName);
     const transportUri = media && media.CurrentURI;
     if (!transportUri) return null;
     const direct = favorites.find((f) => f.uri && sameFavoriteUri(f.uri, transportUri));
@@ -2344,6 +2373,16 @@ async function playViaQueue(device, roomName, uri, metadata) {
   throw lastErr;
 }
 
+// From the event-fed room cache (PlayState events + polls); unknown counts
+// as playing so the old, safe pause-and-settle path is kept.
+function isRoomKnownPlaying(roomName) {
+  const key = String(roomName || '').toLowerCase();
+  for (const [name, room] of lastRoomsByName) {
+    if (name.toLowerCase() === key) return room.playing !== false;
+  }
+  return true;
+}
+
 async function playItemNow(roomName, uri, metadata) {
   if (usingMock) return;
   const device = findDevice(roomName);
@@ -2360,8 +2399,14 @@ async function playItemNow(roomName, uri, metadata) {
     // (still failed in under 450ms in testing); adding a settling delay
     // after it, plus a retry on setAVTransportURI itself, matching the
     // same pattern already used for the Play call below.
-    await device.pause().catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    //
+    // Only when the room is actually playing, though: a stopped/paused
+    // room has nothing to settle, and the fixed 300 ms was paid on every
+    // single source tap.
+    if (isRoomKnownPlaying(roomName)) {
+      await device.pause().catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
 
     // Container-style favorites (x-rincon-cpcontainer / x-rincon-playlist
     // -- e.g. newly added Pandora stations or playlists) can't be set as
@@ -2393,15 +2438,18 @@ async function playItemNow(roomName, uri, metadata) {
     }
     // setAVTransportURI alone doesn't guarantee playback actually
     // starts -- confirmed in practice (selecting a favorite did
-    // nothing until Play was pressed manually). A brief pause before
-    // the follow-up Play call avoids hitting the device while it's
-    // still processing the URI change, which otherwise risks a
-    // "Transition not available" error -- and if it still happens,
-    // one retry after a longer pause covers the common transient case.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // nothing until Play was pressed manually). The library's
+    // setAVTransportURI does send its own Play straight after the URI
+    // (node_modules/sonos/lib/sonos.js, unless the SOAP result is empty),
+    // so this one is the safety net and no longer waits a fixed 400 ms
+    // first. If it's refused ("transition not available"), check whether
+    // the speaker is already starting up from the library's Play before
+    // retrying after a longer pause.
     try {
       await device.play();
     } catch (err) {
+      const state = await device.getCurrentState().catch(() => null);
+      if (state === 'playing' || state === 'transitioning') return;
       debugLog.warn('sonos', `playItem(${roomName}): initial Play failed (${err.message}), retrying once after a longer pause`);
       await new Promise((resolve) => setTimeout(resolve, 800));
       await device.play();
@@ -2560,10 +2608,32 @@ function attachContentDirectoryListener() {
 // for network errors, which silently broke Play Next positioning and
 // shuffle availability. Hence the warn-logging in every caller now.
 async function isPlayingFromQueue(roomName) {
-  const device = findDevice(coordinatorNameFor(roomName));
-  if (!device) return false;
-  const info = await device.avTransportService().GetMediaInfo();
+  const coordName = coordinatorNameFor(roomName);
+  if (!findDevice(coordName)) return false;
+  const info = await getMediaInfoShared(coordName);
   return typeof info.CurrentURI === 'string' && info.CurrentURI.startsWith('x-rincon-queue:');
+}
+
+// One now-playing lookup asked GetMediaInfo twice in a row (favorite
+// matching, then the queue check), serially. Shared per coordinator for
+// a moment, and dropped together with the now-playing cache whenever
+// anything changes (see invalidateNowPlaying).
+const MEDIA_INFO_CACHE_MS = 1000;
+const mediaInfoShared = new Map(); // lowercased coordinator -> { promise, at }
+function getMediaInfoShared(coordName) {
+  const key = String(coordName || '').toLowerCase();
+  const cached = mediaInfoShared.get(key);
+  if (cached && Date.now() - cached.at < MEDIA_INFO_CACHE_MS) return cached.promise;
+  const device = findDevice(coordName);
+  if (!device) return Promise.reject(new Error(`Room not found: ${coordName}`));
+  const entry = { at: Date.now(), promise: null };
+  entry.promise = withTimeout(device.avTransportService().GetMediaInfo(), DEVICE_CALL_TIMEOUT_MS, `GetMediaInfo(${coordName})`)
+    .catch((err) => {
+      if (mediaInfoShared.get(key) === entry) mediaInfoShared.delete(key);
+      throw err;
+    });
+  mediaInfoShared.set(key, entry);
+  return entry.promise;
 }
 
 async function getQueue(roomName, start = 0) {
