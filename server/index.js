@@ -867,7 +867,9 @@ async function main() {
   setInterval(scheduleInUsePush, 5000); // safety net for changes made outside the panel
 
   function broadcast(payload) {
-    const msg = JSON.stringify(payload);
+    // Same art-URL rewrite res.json() applies (see artProxy.jsonReplacer)
+    // -- pushed now-playing carries albumArtUrl too.
+    const msg = JSON.stringify(payload, artProxy.jsonReplacer);
     wss.clients.forEach((client) => {
       if (client.readyState === client.OPEN) client.send(msg);
     });
