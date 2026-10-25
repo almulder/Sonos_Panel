@@ -92,9 +92,20 @@ function configure({ hostsProvider, dataDir }) {
   try {
     fs.mkdirSync(diskDir, { recursive: true });
     for (const file of fs.readdirSync(diskDir)) {
+      const full = path.join(diskDir, file);
+      // Leftover from a write interrupted by a crash/restart.
+      if (file.endsWith('.tmp')) { try { fs.unlinkSync(full); } catch (err) { /* ignore */ } continue; }
       const m = file.match(/^([a-f0-9]{40})\.(jpg|png|gif|webp)$/);
       if (!m) continue;
-      const st = fs.statSync(path.join(diskDir, file));
+      const st = fs.statSync(full);
+      const prev = diskIndex.get(m[1]);
+      if (prev) {
+        // Two types for one image: keep the newer, delete the other.
+        const [keep, drop] = prev.mtimeMs >= st.mtimeMs ? [prev, { file }] : [{ file, size: st.size, mtimeMs: st.mtimeMs }, prev];
+        try { fs.unlinkSync(path.join(diskDir, drop.file)); } catch (err) { /* ignore */ }
+        if (keep === prev) continue;
+        diskBytes -= prev.size;
+      }
       diskIndex.set(m[1], { file, size: st.size, mtimeMs: st.mtimeMs });
       diskBytes += st.size;
     }
@@ -135,7 +146,26 @@ function parseSpeakerArt(raw) {
   if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(u.hostname)) return null;
   const key = u.pathname + u.search;
   if (!ART_PATH_RE.test(key)) return null;
+  if (u.pathname === '/getaa' && !isAllowedGetaaTarget(u.searchParams.get('u'))) return null;
   return { host: u.hostname, key };
+}
+
+// getaa makes the SPEAKER fetch whatever its u= names and hand back the
+// cover, so an unchecked u= would let /api/art relay requests to any
+// host through a speaker. Sonos track URIs (x-sonos-http:, x-sonosapi-*:,
+// x-file-cifs:, aac:, ...) are resolved by the speaker through its own
+// services and can't name an arbitrary web host; plain http(s) is only
+// allowed for our own Local Library stream URLs.
+function isAllowedGetaaTarget(inner) {
+  if (typeof inner !== 'string' || !inner) return false;
+  const scheme = (inner.match(/^([a-z][a-z0-9+.-]*):/i) || [])[1];
+  if (!scheme) return false;
+  const s = scheme.toLowerCase();
+  if (s === 'http' || s === 'https') {
+    const base = localLibrary.getPublicBaseUrl();
+    return !!base && inner.startsWith(`${base}/stream/`);
+  }
+  return s !== 'file' && s !== 'ftp' && s !== 'data' && s !== 'javascript';
 }
 
 function isKnownHost(host) {
@@ -178,6 +208,31 @@ function extForType(type) {
 }
 
 const TYPE_FOR_EXT = { jpg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+// Only raster types are ever stored or served. Anything else -- SVG above
+// all, which can carry script and would run on the panel's own origin
+// (the API has no auth) -- is treated as "no image".
+const ALLOWED_TYPES = new Set(Object.values(TYPE_FOR_EXT).concat('image/jpg', 'image/pjpeg'));
+function safeImageType(raw) {
+  const t = String(raw || '').split(';')[0].trim().toLowerCase();
+  return ALLOWED_TYPES.has(t) ? TYPE_FOR_EXT[extForType(t)] : null;
+}
+
+// "No art" answers are remembered per URL; capped so junk URLs can't
+// grow it forever (each key can be ~4 KB).
+const NEGATIVE_MAX_ENTRIES = 5000;
+function rememberMissing(key, ms) {
+  negative.set(key, Date.now() + ms);
+  if (negative.size <= NEGATIVE_MAX_ENTRIES) return;
+  const now = Date.now();
+  for (const [k, until] of negative) if (until <= now) negative.delete(k);
+  for (const k of negative.keys()) {
+    if (negative.size <= NEGATIVE_MAX_ENTRIES) break;
+    negative.delete(k); // oldest first (insertion order)
+  }
+}
+// More than this many images waiting for a speaker slot means something is
+// requesting junk in bulk -- shed it rather than queue without limit.
+const MAX_WAITERS = 300;
 
 function memGet(key) {
   const entry = memory.get(key);
@@ -226,14 +281,23 @@ function diskPut(key, entry) {
   if (!diskDir) return;
   const hash = hashKey(key);
   const file = `${hash}.${extForType(entry.type)}`;
-  // Fire-and-forget: the response never waits on the disk.
-  fs.promises.writeFile(path.join(diskDir, file), entry.buf).then(() => {
+  // Fire-and-forget: the response never waits on the disk. Written to a
+  // temp name and renamed, so a crash mid-write can't leave a truncated
+  // file that gets indexed and served for a month.
+  const tmp = path.join(diskDir, `${file}.${process.pid}.${Date.now()}.tmp`);
+  fs.promises.writeFile(tmp, entry.buf).then(() => fs.promises.rename(tmp, path.join(diskDir, file))).then(() => {
     const old = diskIndex.get(hash);
-    if (old) diskBytes -= old.size;
+    if (old) {
+      diskBytes -= old.size;
+      // Same image came back as a different type: drop the other file,
+      // or it would sit on disk uncounted and never be evicted.
+      if (old.file !== file) fs.promises.unlink(path.join(diskDir, old.file)).catch(() => {});
+    }
     diskIndex.set(hash, { file, size: entry.buf.length, mtimeMs: Date.now() });
     diskBytes += entry.buf.length;
     if (++writesSincePrune >= 100 || diskBytes > DISK_MAX_BYTES) { writesSincePrune = 0; pruneDisk(); }
   }).catch((err) => {
+    fs.promises.unlink(tmp).catch(() => {});
     debugLog.warn('art', `could not write art cache file: ${err.message}`);
   });
 }
@@ -370,7 +434,8 @@ async function localArtFor(key) {
   try {
     const buf = await fs.promises.readFile(abs);
     if (buf.length === 0 || buf.length > MAX_IMAGE_BYTES) return null;
-    return { buf, type: localLibrary.imageContentTypeFor(abs) };
+    const type = safeImageType(localLibrary.imageContentTypeFor(abs));
+    return type ? { buf, type } : null;
   } catch (err) {
     return null;
   }
@@ -382,13 +447,16 @@ async function localArtFor(key) {
 async function fetchFromSpeaker(host, key) {
   const res = await axios.get(`http://${host}:${SPEAKER_PORT}${key}`, {
     responseType: 'arraybuffer',
+    // axios' timeout is an inactivity timer; the signal is the hard
+    // deadline, so a speaker trickling bytes can't hold a slot forever.
     timeout: UPSTREAM_TIMEOUT_MS,
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     maxContentLength: MAX_IMAGE_BYTES,
     maxRedirects: 0,
     validateStatus: () => true
   });
-  const type = String(res.headers['content-type'] || '');
-  if (res.status === 200 && type.startsWith('image/') && res.data && res.data.length > 0) {
+  const type = safeImageType(res.headers['content-type']);
+  if (res.status === 200 && type && res.data && res.data.length > 0) {
     return { entry: { buf: Buffer.from(res.data), type } };
   }
   return { status: res.status };
@@ -430,7 +498,7 @@ function load(key, prefer, high) {
           return Object.assign({ source: 'speaker' }, result.entry);
         }
         stats.missing++;
-        negative.set(key, Date.now() + (result.status === 404 ? NEGATIVE_404_MS : NEGATIVE_ERROR_MS));
+        rememberMissing(key, result.status === 404 ? NEGATIVE_404_MS : NEGATIVE_ERROR_MS);
         return null;
       } catch (err) {
         unhealthy = true;
@@ -438,7 +506,7 @@ function load(key, prefer, high) {
         if (attempt === 2 || !target) {
           stats.failed++;
           debugLog.warn('art', `art fetch failed from ${host}: ${err.message}`);
-          negative.set(key, Date.now() + NEGATIVE_ERROR_MS);
+          rememberMissing(key, NEGATIVE_ERROR_MS);
           return null;
         }
       } finally {
@@ -465,6 +533,14 @@ async function handleRequest(req, res) {
   const parsed = parseSpeakerArt(req.query.u);
   if (!parsed || !isKnownHost(parsed.host)) {
     return res.status(400).json({ error: 'Not a speaker art URL' });
+  }
+  // Belt and braces on top of the raster-only type check: never let the
+  // browser sniff or run anything served from here.
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  if (waiters.length >= MAX_WAITERS && !memory.has(parsed.key) && !inflight.has(parsed.key)) {
+    res.setHeader('Retry-After', '5');
+    return res.status(503).end();
   }
   try {
     const entry = await load(parsed.key, parsed.host, true);
