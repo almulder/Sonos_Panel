@@ -55,27 +55,12 @@ function buildExtraTabs() {
 // Now a SAFETY-NET cadence rather than the primary update mechanism --
 // see sonos.js's attachDeviceEventListeners/attachTopologyListener for
 // the real-time push updates that handle the common case instantly.
-// This still runs regularly specifically because that push path has a
-// known gap (documented in sonos.js): if a UPnP subscription's renewal
-// fails for certain reasons, the library stops retrying it silently,
-// with no self-healing. 15s means a dead subscription is caught and
-// corrected reasonably quickly rather than a room silently going stale
-// until a manual restart.
+// Still runs regularly because the push path can fail silently (a dead
+// UPnP subscription -- see ensureSubscribed in sonos.js for the
+// self-heal) and because only a full poll notices a room coming back
+// online. The poll reads live values, so 15 s also bounds how long a
+// room can look wrong if its events stop.
 const POLL_INTERVAL_MS = 15000;
-// Tightened from 500ms now that a burst only re-queries the room(s)
-// actually involved (see triggerSonosFastPoll) instead of every device --
-// the risk with a fast interval was always about how many speakers get
-// hit per tick, not the interval number itself. 150ms is a meaningful
-// step down without the request-overlap/overload risk a much lower
-// number (e.g. 50ms) would carry across 9+ real devices.
-const SONOS_FAST_POLL_INTERVAL_MS = 150;
-// Separate, more conservative interval specifically for FULL polls
-// (grouping/ungrouping, which changes topology and needs every device
-// re-checked). This intentionally stays at the original safer cadence --
-// a full poll touches every device no matter how fast it's requested, so
-// it shouldn't run at the same tightened rate as a targeted poll that
-// only touches one or two.
-const SONOS_FULL_POLL_INTERVAL_MS = 500;
 
 // Lets route handlers push an update immediately (e.g. right after an
 // optimistic topology patch) instead of waiting for the next scheduled
@@ -83,53 +68,47 @@ const SONOS_FULL_POLL_INTERVAL_MS = 500;
 let broadcastNow = null;
 let scheduleInUsePushHook = null; // set in main(); lets routes nudge the in-use push
 
-// Brief burst of faster Sonos polling right after a room/volume/group
-// action, then back to the normal 2s cadence -- per request, room
-// grouping/ungrouping, volume changes, and track changes felt slow to
-// reflect. Kept short and, critically, SCOPED to just the room(s)
-// actually involved (sonosFastPollTargets) rather than polling every
-// speaker at this faster rate -- a single-room volume tweak only
-// re-queries that one device now, regardless of total room count. This
-// is what makes a fast interval safe: the earlier version already hit a
-// real "excessive hub load" style problem once before on different
-// hardware from polling too broadly, and multiplying a fast interval
-// across every device would risk the same thing again. Grouping/
-// ungrouping is the one exception -- topology itself changes, so those
-// two pass null (see below) to force a full untargeted poll, since a
-// grouping change can affect how OTHER rooms display their group label
-// too, not just the room that was tapped. Full polls run at the more
-// conservative SONOS_FULL_POLL_INTERVAL_MS rather than the tightened
-// targeted one.
-const SONOS_FAST_POLL_BURST_MS = 5000;
-let sonosFastPollUntil = 0;
-// Two pieces of state, kept explicit rather than overloading one
-// variable: sonosFastPollFullPoll flags a topology-changing action
-// (group/ungroup) that needs every device re-queried; sonosFastPollTargets
-// holds the specific rooms for everything else. Reset to a clean slate
-// whenever a trigger arrives after the previous burst has fully expired,
-// so stale targets from an old burst never leak into a new one.
-let sonosFastPollFullPoll = false;
-let sonosFastPollTargets = new Set();
+// After a room/volume/transport action, a couple of CONFIRMING polls of
+// just the room(s) involved -- not a burst. This used to re-query the
+// targeted rooms every 150 ms for 5 s, but with events attached the
+// library answers volume/mute/state from its event cache, so those ~33
+// polls per tap mostly re-read what the events had already pushed (and
+// each one could wake every screen). Events are the primary path now;
+// these two polls only exist to catch the case where the event never
+// comes (a dead subscription, a speaker that ignored the command):
+//   - 1 s after the first action (not pushed back by further taps, so a
+//     long slider drag still gets checked about once a second),
+//   - 3 s after the LAST action (pushed back by every tap, so the final
+//     settled state is always confirmed once the user lets go).
+// Passing null instead of room names asks for full polls at the same
+// points (topology-changing actions; currently unused, since grouping
+// relies on ZonesChanged -- see /api/sonos/group).
+const SONOS_CONFIRM_POLLS = [
+  { delayMs: 1000, restartOnTrigger: false },
+  { delayMs: 3000, restartOnTrigger: true }
+];
+const confirmPollTimers = new Map(); // delayMs -> { timer, targets: Set | null (full) }
+let runConfirmPoll = null; // set in main(), where broadcastRooms lives
+// Name kept from the burst era so every action route's call stays as is.
 function triggerSonosFastPoll(targetRoomNames) {
-  const burstActive = Date.now() < sonosFastPollUntil;
-  sonosFastPollUntil = Date.now() + SONOS_FAST_POLL_BURST_MS;
-
-  if (!targetRoomNames) {
-    sonosFastPollFullPoll = true;
-    return;
-  }
-
-  if (!burstActive) {
-    sonosFastPollFullPoll = false;
-    sonosFastPollTargets = new Set(targetRoomNames);
-  } else if (!sonosFastPollFullPoll) {
-    // Accumulate rather than overwrite -- adjusting two different
-    // rooms in quick succession within the same burst window should
-    // get both refreshed, not just the most recent one.
-    targetRoomNames.forEach((name) => sonosFastPollTargets.add(name));
-  }
-  // else: a full-poll trigger is already active this burst (from a
-  // group/ungroup action) -- don't downgrade it to a targeted poll.
+  SONOS_CONFIRM_POLLS.forEach(({ delayMs, restartOnTrigger }) => {
+    let entry = confirmPollTimers.get(delayMs);
+    if (entry) {
+      // Accumulate rather than overwrite -- adjusting two rooms in quick
+      // succession should get both confirmed. A full poll wins.
+      if (!targetRoomNames) entry.targets = null;
+      else if (entry.targets) targetRoomNames.forEach((name) => entry.targets.add(name));
+      if (!restartOnTrigger) return;
+      clearTimeout(entry.timer);
+    } else {
+      entry = { targets: targetRoomNames ? new Set(targetRoomNames) : null };
+      confirmPollTimers.set(delayMs, entry);
+    }
+    entry.timer = setTimeout(() => {
+      confirmPollTimers.delete(delayMs);
+      if (runConfirmPoll) runConfirmPoll(entry.targets);
+    }, delayMs);
+  });
 }
 
 const app = express();
@@ -875,8 +854,8 @@ async function main() {
     });
   }
 
-  // The fast-poll burst re-sends the room list every ~150 ms for 5 s
-  // after any tap, almost always unchanged -- and each copy woke every
+  // Events, confirming polls and the 15 s poll all re-send the room
+  // list, usually unchanged -- and each copy woke every
   // screen up to parse it (the slow wall panel included). Identical lists
   // are now skipped, except one every ROOMS_RESEND_MS so screens still get
   // a regular heartbeat (they use it as a safety-net now-playing resync).
@@ -956,8 +935,15 @@ async function main() {
     const delay = Math.max(0, Math.min(NOWPLAYING_PUSH_DEBOUNCE_MS, firstAt + NOWPLAYING_PUSH_MAX_WAIT_MS - Date.now()));
     nowPlayingPushTimers.set(room, { firstAt, timer: setTimeout(() => pushNowPlaying(room), delay) });
   });
-  sonos.onGroupVolumeChanged(() => {
-    broadcast({ type: 'sonos:groupvolume-changed' });
+  // The group volume event now carries the new level (parsed from the
+  // coordinator's GroupRenderingControl NOTIFY), so a grouped screen sets
+  // its slider straight from this instead of GETting /group-volume. When
+  // the body had no usable GroupVolume it goes out as the old bare
+  // "go re-check" signal (room still named, so screens can ignore it).
+  sonos.onGroupVolumeChanged((room, groupVolume) => {
+    broadcast(groupVolume
+      ? { type: 'sonos:groupvolume-changed', room, volume: groupVolume.volume, muted: groupVolume.muted }
+      : { type: 'sonos:groupvolume-changed', room });
   });
 
   // Lets route handlers (see the optimistic patch in /api/sonos/group
@@ -967,52 +953,44 @@ async function main() {
     broadcastRooms(sonos.getLastKnownRooms());
   };
 
-  function scheduleSonosPoll() {
-    const burstActive = Date.now() < sonosFastPollUntil;
-    const useTargeted = burstActive && !sonosFastPollFullPoll && sonosFastPollTargets.size > 0;
-    const useFullBurst = burstActive && sonosFastPollFullPoll;
-    // Targeted bursts run at the tightened interval (they only touch 1-2
-    // devices); full bursts (grouping/ungrouping) run at the more
-    // conservative interval since they touch every device regardless of
-    // how fast they're ticking.
-    let interval = POLL_INTERVAL_MS;
-    if (useTargeted) interval = SONOS_FAST_POLL_INTERVAL_MS;
-    else if (useFullBurst) interval = SONOS_FULL_POLL_INTERVAL_MS;
-
-    setTimeout(async () => {
-      try {
-        const rooms = useTargeted
-          ? await sonos.getRoomsTargeted([...sonosFastPollTargets])
-          : await sonos.getRooms();
-        broadcastRooms(rooms);
-        scheduleInUsePush();
-      } catch (err) {
-        debugLog.warn('server', `poll loop (sonos) error: ${err.message}`);
-      }
-      scheduleSonosPoll();
-    }, interval);
-  }
-  scheduleSonosPoll();
-
-  // Genuinely independent safety-net timer, decoupled entirely from the
-  // burst/targeted scheduler above. The recursive scheduler can end up
-  // staying in "targeted-only" mode indefinitely during active use --
-  // any volume/play/group action extends the fast-poll burst window
-  // another 5 seconds, so continuous normal usage can keep it from ever
-  // falling back to a full untargeted poll for a long stretch. Since
-  // only a FULL poll re-checks devices that aren't part of whatever's
-  // currently targeted, that meant a reconnected room sitting outside
-  // the active target set could go unnoticed indefinitely. This runs
-  // on its own fixed cadence no matter what the other timer is doing,
-  // guaranteeing every room gets a fresh reachability check regularly.
-  setInterval(async () => {
-    try {
-      const rooms = await sonos.getRooms();
-      broadcastRooms(rooms);
-    } catch (err) {
-      debugLog.warn('server', `safety-net full poll error: ${err.message}`);
+  // ONE full-poll timer. There used to be two (a recursive scheduler
+  // that could stay in targeted-burst mode indefinitely during active
+  // use, plus an independent safety-net interval added because of that).
+  // The guarantee the second one existed for still holds, more simply:
+  // this interval is never displaced or postponed by actions (confirming
+  // polls are separate one-shot timers), so every room -- including one
+  // that just reconnected and isn't part of anything being targeted --
+  // gets a fresh reachability check at least every POLL_INTERVAL_MS.
+  // Overlapping full polls share one in-flight run instead of stacking
+  // up behind a slow/unreachable speaker's timeouts.
+  let fullPollInFlight = null;
+  function runFullPoll(label) {
+    if (!fullPollInFlight) {
+      fullPollInFlight = (async () => {
+        try {
+          broadcastRooms(await sonos.getRooms());
+          scheduleInUsePush();
+        } catch (err) {
+          debugLog.warn('server', `${label} (sonos) error: ${err.message}`);
+        } finally {
+          fullPollInFlight = null;
+        }
+      })();
     }
-  }, POLL_INTERVAL_MS);
+    return fullPollInFlight;
+  }
+  setInterval(() => runFullPoll('full poll'), POLL_INTERVAL_MS);
+  runFullPoll('startup poll');
+
+  runConfirmPoll = async (targets) => {
+    if (!targets) return runFullPoll('confirming full poll');
+    try {
+      broadcastRooms(await sonos.getRoomsTargeted([...targets]));
+      scheduleInUsePush();
+    } catch (err) {
+      debugLog.warn('server', `confirming poll (sonos) error: ${err.message}`);
+    }
+  };
 }
 
 main().catch((err) => {

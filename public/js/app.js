@@ -116,7 +116,7 @@
       } else if (msg.type === 'sonos:sources-inuse') {
         SonosView.handleSourcesInUse(msg.items);
       } else if (msg.type === 'sonos:groupvolume-changed') {
-        SonosView.handleGroupVolumeChanged();
+        SonosView.handleGroupVolumeChanged(msg.room, msg.volume);
       } else if (msg.type === 'queue:changed') {
         if (window.QueuePanel) window.QueuePanel.handleQueueChanged(msg.room);
       }

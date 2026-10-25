@@ -305,6 +305,7 @@ async function init() {
       attachDeviceEventListeners(name, device);
     });
     attachTopologyListener();
+    startSubscriptionWatchdog();
 
     // Warm the Favorites and Playlists caches in the background so the
     // first real visit to Sources doesn't eat a fresh-fetch delay --
@@ -362,8 +363,8 @@ async function getWarmArtUrls() {
 }
 
 // Real-time updates, in addition to (not instead of) the polling below --
-// see the big comment block above SONOS_FAST_POLL_BURST_MS-equivalent
-// constants in index.js for the full reasoning. Short version: the
+// see the comments above POLL_INTERVAL_MS and triggerSonosFastPoll in
+// index.js for how the two fit together. Short version: the
 // `sonos` npm package already maintains its own UPnP event subscriptions
 // per device once you attach a listener (it auto-subscribes on first
 // .on() call, and auto-renews every 25 min internally) -- attaching to
@@ -372,14 +373,12 @@ async function getWarmArtUrls() {
 // updates the cache directly from the event payload (no extra network
 // call needed, unlike a poll) and pushes it out immediately.
 //
-// Known gap, from reading the library's own source: if a subscription
-// renewal fails for any reason other than one specific network error
-// code, the library stops retrying that device's renewal permanently,
-// with no automatic recovery. That's exactly why polling stays in place
-// as a safety net (see POLL_INTERVAL_MS in index.js) rather than this
-// being the only source of truth -- a silently-dead subscription would
-// otherwise mean that room's live updates just stop forever until a
-// restart, with nothing to notice or self-heal it.
+// Known gaps, from reading the library's own source: a renewal failure
+// can stop that device's renewals permanently, and a speaker reboot
+// silently drops its subscriptions. ensureSubscribed (below) is the
+// self-heal for both; polling stays in place as a safety net too (see
+// POLL_INTERVAL_MS in index.js) and reads live values (readDeviceLive),
+// so a dead subscription can't freeze the room list in the meantime.
 function attachDeviceEventListeners(name, device) {
   device.on('PlayState', (state) => {
     try {
@@ -433,14 +432,23 @@ function attachDeviceEventListeners(name, device) {
 
   // Group volume (the synced slider across a bonded group) is a
   // separate concept from each speaker's own individual volume above.
-  // Same lightweight-signal approach as AVTransport -- let the client
-  // re-run its existing syncVolumeRailToFocusedRoom() rather than us
-  // hand-parsing the raw GroupRenderingControl payload (which the
-  // library doesn't parse into clean fields the way it does for plain
-  // RenderingControl).
-  device.on('GroupRenderingControl', () => {
+  // The library hands this event over unparsed, but the body is just
+  // plain properties (GroupVolume/GroupMute/GroupVolumeChangeable -- see
+  // parseGroupRenderingBody), so the new level is read straight out of
+  // it and pushed to screens with the signal. That saves every screen a
+  // GET /group-volume round trip per change, which during a group drag
+  // was one per tick per screen. Only the group's coordinator speaks
+  // for the group (members carry their own copy), so member events are
+  // cached but not pushed.
+  device.on('GroupRenderingControl', (body) => {
     try {
-      if (groupVolumeChangedCallback) groupVolumeChangedCallback();
+      const parsed = parseGroupRenderingBody(body);
+      const previous = groupVolumeByRoom.get(name);
+      const volume = parsed.volume !== null ? parsed.volume : (previous ? previous.volume : null);
+      const muted = parsed.muted !== null ? parsed.muted : (previous ? previous.muted : false);
+      if (volume !== null) groupVolumeByRoom.set(name, { volume, muted, at: Date.now(), fromEvent: true });
+      if (coordinatorNameFor(name) !== name) return;
+      if (groupVolumeChangedCallback) groupVolumeChangedCallback(name, volume !== null ? { volume, muted } : null);
     } catch (err) {
       debugLog.warn('sonos', `Error handling GroupRenderingControl event for ${name}: ${err.message}`);
     }
@@ -464,7 +472,182 @@ function attachDeviceEventListeners(name, device) {
     }
   });
 
+  // Liveness bookkeeping for the subscription watchdog (see
+  // ensureSubscribed). RenderingControl/AVTransport fire on every
+  // NOTIFY, not just on the value changes the handlers above react to.
+  ['AVTransport', 'RenderingControl', 'GroupRenderingControl', 'QueueChanged'].forEach((evt) => {
+    device.on(evt, () => lastEventAt.set(device, Date.now()));
+  });
+
   attachContentDirectoryListener();
+}
+
+// Last group volume seen per room (only meaningful for coordinators):
+// { volume, muted, at, fromEvent }. Fed by GroupRenderingControl events
+// and by real GetGroupVolume reads; dropped whenever the panel changes
+// a volume or the topology moves (see invalidateGroupVolume).
+const groupVolumeByRoom = new Map();
+// How long a cached group volume answers GET /group-volume. Event-fed
+// entries could arguably be trusted indefinitely (Sonos sends a NOTIFY
+// on every group-volume change, including ones caused by a member's own
+// volume moving), but a silently dead subscription would then freeze
+// the slider -- so even those age out, just more slowly.
+const GROUP_VOLUME_POLL_TTL_MS = 2000;
+const GROUP_VOLUME_EVENT_TTL_MS = 30000;
+
+// The GroupRenderingControl NOTIFY body as the library hands it over:
+// xml2js (explicitArray: false) output of the <e:property> elements --
+// an array of one-key objects when there are several properties, a
+// single object when there's one. Values are strings. Anything missing
+// or unparseable comes back null rather than throwing, so a firmware
+// that drops a field just means "no new value" instead of a bogus 0.
+function parseGroupRenderingBody(body) {
+  const out = { volume: null, muted: null };
+  const props = Array.isArray(body) ? body : [body];
+  props.forEach((prop) => {
+    if (!prop || typeof prop !== 'object') return;
+    if (prop.GroupVolume !== undefined) {
+      const v = parseInt(prop.GroupVolume, 10);
+      if (Number.isFinite(v) && v >= 0 && v <= 100) out.volume = v;
+    }
+    if (prop.GroupMute !== undefined) {
+      const m = String(prop.GroupMute).trim();
+      if (m === '1' || m === '0') out.muted = m === '1';
+    }
+  });
+  return out;
+}
+
+function invalidateGroupVolume(roomName) {
+  if (!roomName) {
+    groupVolumeByRoom.clear();
+    return;
+  }
+  groupVolumeByRoom.delete(roomName);
+  groupVolumeByRoom.delete(coordinatorNameFor(roomName));
+}
+
+function cachedGroupVolume(roomName) {
+  const entry = groupVolumeByRoom.get(roomName);
+  if (!entry) return null;
+  const ttl = entry.fromEvent ? GROUP_VOLUME_EVENT_TTL_MS : GROUP_VOLUME_POLL_TTL_MS;
+  return Date.now() - entry.at < ttl ? entry : null;
+}
+
+// ---- Subscription watchdog ----
+//
+// The library's own renewal (adv-listener.js) has three holes, all
+// confirmed in its source: (1) a renewal that fails with anything but
+// EHOSTUNREACH clears the renewal interval for that device FOREVER;
+// (2) a speaker reboot forgets our SIDs, and nothing notices until the
+// next 25-min renewal gets a 412 and resubscribes; (3) a device that
+// was unreachable when we first attached keeps _isSubscribed=true with
+// no subscription behind it, so it's never retried at all. Each means
+// a room whose live updates silently stop.
+//
+// A "no events for N minutes" timer can't tell those apart from a
+// speaker that's just idle (Sonos sends nothing when nothing changes),
+// so instead this re-runs the library's own renewal, on our schedule,
+// whenever there's a reason to doubt the subscription:
+//   - every SUBSCRIPTION_CHECK_MS for every reachable device (covers
+//     the stopped-timer and reboot cases within that window -- the
+//     same half-of-timeout cadence node-sonos-discovery uses),
+//   - the moment a poll sees an unreachable device come back (a
+//     reboot or power cycle, which is exactly when SIDs are lost),
+//   - when a poll's live read disagrees with the library's event cache
+//     and no event has arrived for a while (that cache is only written
+//     by events, so a mismatch means they've stopped).
+// renewSubscription() already falls back to a fresh SUBSCRIBE when the
+// speaker rejects the old SID, so a renew covers the reboot case; what
+// this adds is re-adding endpoints the library gave up on and
+// restarting its renewal interval. That touches private members
+// (_deviceSubscriptions, _isSubscribed, _startTimer) but calls only
+// methods the library itself uses -- no monkey-patching. If a future
+// version renames them this degrades to a logged warning, and the 15 s
+// poll (which reads live values, see readDeviceLive) still keeps the
+// room list correct.
+const SUBSCRIPTION_CHECK_MS = 10 * 60 * 1000;
+const SUBSCRIPTION_RETRY_COOLDOWN_MS = 30000;
+// A live read disagreeing with the event cache only counts as evidence
+// of a dead subscription once events have been quiet this long -- the
+// event for the very change just read may still be in flight.
+const EVENT_QUIET_FOR_MISMATCH_MS = 5000;
+const DEVICE_EVENT_ENDPOINTS = [
+  '/MediaRenderer/AVTransport/Event',
+  '/MediaRenderer/RenderingControl/Event',
+  '/MediaRenderer/GroupRenderingControl/Event',
+  '/MediaRenderer/Queue/Event'
+];
+// The library puts the household-wide subscriptions on whichever device
+// subscribed first (the first entry of _deviceSubscriptions).
+const GLOBAL_EVENT_ENDPOINTS = [
+  '/AlarmClock/Event',
+  '/ZoneGroupTopology/Event',
+  '/MediaServer/ContentDirectory/Event'
+];
+const lastEventAt = new WeakMap(); // device -> ms timestamp of last NOTIFY
+const subscriptionCheckAt = new WeakMap(); // device -> last ensureSubscribed start
+const subscriptionCheckInFlight = new WeakSet();
+
+async function ensureSubscribed(device, name, reason) {
+  if (usingMock || !device || subscriptionCheckInFlight.has(device)) return;
+  const last = subscriptionCheckAt.get(device) || 0;
+  if (reason !== 'periodic' && Date.now() - last < SUBSCRIPTION_RETRY_COOLDOWN_MS) return;
+  subscriptionCheckInFlight.add(device);
+  subscriptionCheckAt.set(device, Date.now());
+  try {
+    const subs = Listener._deviceSubscriptions;
+    if (!Array.isArray(subs)) throw new Error('library internals changed (no _deviceSubscriptions)');
+    const sub = subs.find((s) => s.device === device);
+    if (!sub) {
+      // Hole (3): the first subscribeTo failed part-way, so the library
+      // never kept the subscription but still thinks it's subscribed.
+      // Clearing the flag lets subscribeTo run for real.
+      debugLog.info('sonos', `Subscribing ${name} to events (${reason}; no live subscription found)`);
+      device._isSubscribed = false;
+      await withTimeout(Listener.subscribeTo(device), DEVICE_CALL_TIMEOUT_MS * 2, `subscribeTo(${name})`);
+      return;
+    }
+    // Renew whatever the library still has (a rejected SID becomes a
+    // fresh SUBSCRIBE inside the library), then re-add any endpoint it
+    // dropped after a failed resubscribe.
+    await withTimeout(sub.renewAllSubscriptions(), DEVICE_CALL_TIMEOUT_MS * 2, `renew(${name})`).catch((err) => {
+      debugLog.warn('sonos', `Event renewal for ${name} failed, re-adding what's missing: ${err.message}`);
+    });
+    const expected = sub === subs[0] ? GLOBAL_EVENT_ENDPOINTS.concat(DEVICE_EVENT_ENDPOINTS) : DEVICE_EVENT_ENDPOINTS;
+    const have = new Set(Object.keys(sub.subscriptions).map((sid) => sub.subscriptions[sid].endpoint));
+    const missing = expected.filter((ep) => !have.has(ep));
+    for (const ep of missing) {
+      await withTimeout(sub.addSubscription(ep), DEVICE_CALL_TIMEOUT_MS, `subscribe ${ep} (${name})`);
+    }
+    // Hole (1): restart the library's 25-min renewal interval, which a
+    // single odd failure may have cleared for good.
+    if (typeof sub._startTimer === 'function') sub._startTimer();
+    if (reason !== 'periodic' || missing.length > 0) {
+      const quiet = lastEventAt.has(device) ? `${Math.round((Date.now() - lastEventAt.get(device)) / 1000)}s ago` : 'never';
+      debugLog.info('sonos', `Event subscription for ${name} refreshed (${reason}; re-added ${missing.length} endpoint(s); last event ${quiet})`);
+    }
+  } catch (err) {
+    debugLog.warn('sonos', `Event subscription check for ${name} failed (${reason}): ${err.message}`);
+  } finally {
+    subscriptionCheckInFlight.delete(device);
+  }
+}
+
+let subscriptionWatchdogStarted = false;
+function startSubscriptionWatchdog() {
+  if (subscriptionWatchdogStarted) return;
+  subscriptionWatchdogStarted = true;
+  setInterval(async () => {
+    // One device at a time: ~4 tiny SUBSCRIBE requests each, nothing
+    // here is urgent, and it keeps the burst off the speakers.
+    for (const [key, device] of devicesByName.entries()) {
+      const name = displayNameByKey.get(key) || key;
+      const room = lastRoomsByName.get(name);
+      if (room && room.reachable === false) continue; // the recovery path in readDeviceLive handles it
+      await ensureSubscribed(device, name, 'periodic');
+    }
+  }, SUBSCRIPTION_CHECK_MS);
 }
 
 // Attached once, globally -- not per-device. The library subscribes to
@@ -503,6 +686,9 @@ function attachTopologyListener() {
       if (Object.keys(map).length === 0) return;
 
       lastCoordinatorMap = map;
+      // Membership changes move the group volume (it's derived from the
+      // members' levels) and can change who the coordinator is.
+      invalidateGroupVolume(null);
       lastRoomsByName.forEach((room, name) => {
         if (map[name]) lastRoomsByName.set(name, { ...room, coordinator: map[name] });
       });
@@ -553,23 +739,6 @@ const SONOS_SYSTEM = String(process.env.SONOS_SYSTEM || 's2').toLowerCase() === 
 
 const DEVICE_CALL_TIMEOUT_MS = 3000;
 
-// Dedicated reachability probe -- deliberately does NOT use
-// device.getVolume()/getCurrentState()/getMuted(). Straight from the
-// 'sonos' library's own source: those three methods all contain the
-// exact same shortcut --
-//   if (this._isSubscribed && this._volume) return this._volume
-// -- meaning once a device is subscribed to real-time events (which we
-// do for every device, for the instant play/volume/track updates) and
-// at least one event has ever fired for it, these methods stop making
-// network calls entirely and just return whatever the last event
-// reported, forever. A genuinely dead device can't send new events
-// either, so the cached value freezes in place -- these three calls
-// are structurally incapable of detecting that a subscribed device has
-// gone offline. The raw service action below has no such shortcut, so
-// it's a genuine network round-trip every time, used ONLY to determine
-// `reachable` -- the wrapper methods are still used elsewhere for their
-// actual values, which are correctly kept fresh via live events anyway
-// whenever the device really is online.
 // Everything the client actually sees goes through here. Two jobs:
 //
 //   1. Drop rooms that aren't currently reachable. A disconnected
@@ -628,14 +797,59 @@ function sanitizeRoomsForClient(rooms) {
   });
 }
 
-async function probeReachable(device, name) {
+// One poll of one device, always over the network. Deliberately NOT
+// device.getVolume()/getCurrentState()/getMuted(): from the 'sonos'
+// library's source, all three short-circuit to the last EVENT value
+// once a device is subscribed --
+//   if (this._isSubscribed && this._volume) return this._volume
+// -- so a poll built on them can't notice an offline device (it just
+// re-reads the frozen cache), can't rescue a room whose subscription
+// has silently died (the very case the safety-net poll exists for),
+// and skips the cache for volume 0 / unmuted anyway (falsy). The raw
+// service actions are real round trips every time. The GetVolume
+// doubles as the reachability probe; mute and transport state are only
+// asked of a device that answered it, so a dead speaker costs one
+// timeout per poll instead of four.
+//
+// Also the watchdog's eyes (see ensureSubscribed): a device coming
+// back from unreachable, or live values contradicting the library's
+// event cache while events have been quiet, both trigger a resubscribe.
+const lastReachable = new WeakMap(); // device -> reachable at the previous poll
+async function readDeviceLive(device, name) {
+  const previous = lastRoomsByName.get(name) || { volume: 0, playing: false, muted: false };
+  let volume;
   try {
-    await withTimeout(device.renderingControlService().GetVolume(), DEVICE_CALL_TIMEOUT_MS, `reachability probe(${name})`);
-    return true;
+    volume = await withTimeout(device.renderingControlService().GetVolume(), DEVICE_CALL_TIMEOUT_MS, `reachability probe(${name})`);
   } catch (err) {
     debugLog.warn('sonos', `reachability probe failed for ${name}: ${err.message}`);
-    return false;
+    lastReachable.set(device, false);
+    return { volume: previous.volume, playing: previous.playing, muted: previous.muted, reachable: false };
   }
+  const [muted, state] = await Promise.all([
+    withTimeout(device.renderingControlService().GetMute(), DEVICE_CALL_TIMEOUT_MS, `GetMute(${name})`).catch((err) => {
+      debugLog.warn('sonos', `GetMute() failed for ${name}: ${err.message}`);
+      return previous.muted;
+    }),
+    withTimeout(device.avTransportService().GetTransportInfo(), DEVICE_CALL_TIMEOUT_MS, `GetTransportInfo(${name})`)
+      .then((info) => Helpers.TranslateState(info.CurrentTransportState))
+      .catch((err) => {
+        debugLog.warn('sonos', `GetTransportInfo() failed for ${name}: ${err.message}`);
+        return null;
+      })
+  ]);
+
+  if (lastReachable.get(device) === false) ensureSubscribed(device, name, 'came back online');
+  lastReachable.set(device, true);
+  const quiet = Date.now() - (lastEventAt.get(device) || 0) > EVENT_QUIET_FOR_MISMATCH_MS;
+  // Only compare settled states: 'transitioning' legitimately differs
+  // from the last event for a moment.
+  const settled = state === 'playing' || state === 'paused' || state === 'stopped';
+  const stale = (device._volume !== undefined && device._volume !== volume)
+    || (device._mute !== undefined && device._mute !== muted)
+    || (settled && device._state !== undefined && device._state !== state);
+  if (quiet && stale) ensureSubscribed(device, name, 'poll disagreed with event cache');
+
+  return { volume, playing: state ? state === 'playing' : previous.playing, muted, reachable: true };
 }
 
 async function getCoordinatorMap() {
@@ -745,27 +959,8 @@ async function getRooms() {
     const rooms = await Promise.all(
       [...devicesByName.entries()].map(async ([key, device]) => {
         const name = displayNameByKey.get(key) || key;
-        let volume = 0;
-        let playing = false;
-        let muted = false;
-        const reachable = await probeReachable(device, name);
-        try {
-          volume = await withTimeout(device.getVolume(), DEVICE_CALL_TIMEOUT_MS, `getVolume(${name})`);
-        } catch (err) {
-          debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
-        }
-        try {
-          const state = await withTimeout(device.getCurrentState(), DEVICE_CALL_TIMEOUT_MS, `getCurrentState(${name})`);
-          playing = state === 'playing';
-        } catch (err) {
-          debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
-        }
-        try {
-          muted = await withTimeout(device.getMuted(), DEVICE_CALL_TIMEOUT_MS, `getMuted(${name})`);
-        } catch (err) {
-          debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
-        }
-        return { name, volume, playing, muted, reachable, coordinator: coordinatorMap[name] || name };
+        const live = await readDeviceLive(device, name);
+        return { name, ...live, coordinator: coordinatorMap[name] || name };
       })
     );
     rooms.sort((a, b) => a.name.localeCompare(b.name));
@@ -774,19 +969,16 @@ async function getRooms() {
   });
 }
 
-// Fast-poll-burst variant: only re-queries the devices in targetRoomNames
-// (typically just the room you touched, or its whole group for a
-// group-volume/group-mute action) and merges the fresh results into the
-// last known full snapshot for everyone else. This is what makes it safe
-// to run the burst interval much faster than the normal cadence without
-// multiplying request load across every speaker -- a single-room volume
-// tweak on a 9-room system now touches 1 device instead of 9, regardless
-// of how short the burst interval is.
+// Confirming-poll variant (see triggerSonosFastPoll in index.js): only
+// re-queries the devices in targetRoomNames (typically just the room you
+// touched, or its whole group for a group-volume/group-mute action) and
+// merges the fresh results into the last known full snapshot for
+// everyone else -- a single-room volume tweak touches 1 device, not 16.
 //
 // Falls back to a full getRooms() if the cache is empty (e.g. right after
-// startup, before any normal-cadence poll has populated it yet) so a
-// burst can never return stale/incomplete data for rooms it's never
-// actually seen.
+// startup, before any normal-cadence poll has populated it yet) so it
+// can never return stale/incomplete data for rooms it's never actually
+// seen.
 async function getRoomsTargeted(targetRoomNames) {
   if (usingMock) return getRooms();
   if (lastRoomsByName.size === 0) return getRooms();
@@ -798,28 +990,8 @@ async function getRoomsTargeted(targetRoomNames) {
         .filter(([key]) => targets.has(displayNameByKey.get(key) || key))
         .map(async ([key, device]) => {
           const name = displayNameByKey.get(key) || key;
-          let volume = 0;
-          let playing = false;
-          let muted = false;
-          const reachable = await probeReachable(device, name);
-          try {
-            volume = await withTimeout(device.getVolume(), DEVICE_CALL_TIMEOUT_MS, `getVolume(${name})`);
-          } catch (err) {
-            debugLog.warn('sonos', `getVolume() failed for ${name}: ${err.message}`);
-          }
-          try {
-            const state = await withTimeout(device.getCurrentState(), DEVICE_CALL_TIMEOUT_MS, `getCurrentState(${name})`);
-            playing = state === 'playing';
-          } catch (err) {
-            debugLog.warn('sonos', `getCurrentState() failed for ${name}: ${err.message}`);
-          }
-          try {
-            muted = await withTimeout(device.getMuted(), DEVICE_CALL_TIMEOUT_MS, `getMuted(${name})`);
-          } catch (err) {
-            debugLog.warn('sonos', `getMuted() failed for ${name}: ${err.message}`);
-          }
-          const coordinator = lastCoordinatorMap[name] || name;
-          return { name, volume, playing, muted, reachable, coordinator };
+          const live = await readDeviceLive(device, name);
+          return { name, ...live, coordinator: lastCoordinatorMap[name] || name };
         })
     );
 
@@ -840,9 +1012,21 @@ async function getGroupVolume(roomName) {
   }
   const device = findDevice(roomName);
   if (!device) return 0;
+  // Answered from the event-fed cache when fresh (see groupVolumeByRoom):
+  // every room-list change on a grouped screen re-asks for this, and a
+  // group volume change already delivered the value moments earlier.
+  const cached = cachedGroupVolume(roomName);
+  if (cached) return cached.volume;
   return guarded(`getGroupVolume(${roomName})`, async () => {
     const groupRendering = new Services.GroupRenderingControl(device.host, device.port);
-    return groupRendering.GetGroupVolume();
+    const volume = await groupRendering.GetGroupVolume();
+    // Keep the event-fed muted flag if there is one; a read is only
+    // trusted briefly (GROUP_VOLUME_POLL_TTL_MS).
+    const previous = groupVolumeByRoom.get(roomName);
+    if (Number.isFinite(volume)) {
+      groupVolumeByRoom.set(roomName, { volume, muted: previous ? previous.muted : false, at: Date.now(), fromEvent: false });
+    }
+    return volume;
   });
 }
 
@@ -870,10 +1054,14 @@ async function setGroupVolume(roomName, volume) {
   }
   const device = findDevice(roomName);
   if (!device) return;
+  // Dropped before AND after: a GET racing the set must not be answered
+  // with the old level, and the event carrying the new one refills it.
+  invalidateGroupVolume(roomName);
   await guarded(`setGroupVolume(${roomName})`, async () => {
     const groupRendering = new Services.GroupRenderingControl(device.host, device.port);
     await groupRendering.SetGroupVolume(clamped);
   });
+  invalidateGroupVolume(roomName);
 }
 
 // Tracks which playlist (if any) is currently active per room, so
@@ -1494,7 +1682,10 @@ async function setVolume(roomName, vol) {
   }
   const device = findDevice(roomName);
   if (!device) return;
+  // A member's own level moves its group's volume too (see getGroupVolume).
+  invalidateGroupVolume(roomName);
   await guarded(`setVolume(${roomName})`, () => device.setVolume(clamped));
+  invalidateGroupVolume(roomName);
   debugLog.info('sonos', `setVolume(${roomName}) -> ${clamped} (individual room, not group)`);
 }
 
@@ -1513,6 +1704,7 @@ async function setGroupMute(roomName, muted) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
+  invalidateGroupVolume(roomName);
   await guarded(`setGroupMute(${roomName})`, async () => {
     const groupRendering = new Services.GroupRenderingControl(device.host, device.port);
     await groupRendering.SetGroupMute(muted);
@@ -3094,6 +3286,7 @@ module.exports = {
   getWarmArtUrls,
   getRooms,
   getRoomsTargeted,
+  parseGroupRenderingBody,
   getGroupMemberNames,
   patchCoordinatorOptimistically,
   getSavedGroups,

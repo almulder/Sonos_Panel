@@ -2584,7 +2584,23 @@ const SonosView = (() => {
       const focused = rooms.find((r) => r.name === focusedRoom);
       if (focused && focused.coordinator === room) scheduleNowPlayingRefresh();
     },
-    async handleGroupVolumeChanged() {
+    // The server now sends the group's new level with the signal (from
+    // the coordinator's own event), so a grouped screen sets its rail
+    // directly -- no GET per change, which during someone's group drag
+    // was one request per tick per screen. setValue already ignores this
+    // while the user's own finger is on the rail. Ungrouped rooms keep
+    // following room.volume from the room list, so they ignore it.
+    // Older servers send a bare signal (no room): re-check as before.
+    async handleGroupVolumeChanged(room, volume) {
+      if (!focusedRoom || !window.VolumeRail) return;
+      if (room && typeof volume === 'number') {
+        if (room === focusedRoom && getMembersOf(focusedRoom).length > 0) window.VolumeRail.setValue(volume);
+        return;
+      }
+      if (room) {
+        const focused = rooms.find((r) => r.name === focusedRoom);
+        if (room !== focusedRoom && !(focused && focused.coordinator === room)) return;
+      }
       await syncVolumeRailToFocusedRoom();
     },
     getFocusedRoom() {
