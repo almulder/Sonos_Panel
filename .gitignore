@@ -8,6 +8,7 @@ yarn-error.log
 data/library.db
 data/library.db-*
 data/artcache/
+data/artcache-remote/
 data/incompatible-files.txt
 data/account-names.json
 data/saved-groups.json

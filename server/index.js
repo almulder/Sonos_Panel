@@ -12,6 +12,7 @@ const sonos = require('./sonos');
 const localLibrary = require('./localLibrary');
 const localScanner = require('./localScanner');
 const localBrowse = require('./localBrowse');
+const artProxy = require('./artProxy');
 const debugLog = require('./debugLog');
 
 const PORT = process.env.PORT || 3000;
@@ -133,6 +134,12 @@ function triggerSonosFastPoll(targetRoomNames) {
 
 const app = express();
 app.use(express.json());
+// Every albumArtUrl in every JSON response that points at a speaker is
+// rewritten to /api/art?u=... here, at serialization time -- see
+// artProxy.jsonReplacer for why this happens on the way out rather than
+// where the URLs are produced (the originals must keep reaching the
+// speakers in DIDL metadata).
+app.set('json replacer', artProxy.jsonReplacer);
 // no-cache here means "revalidate every time", NOT "don't cache":
 // browsers still keep the files but send a conditional request on each
 // load, and the ETag turns unchanged files into ~1ms 304s on the LAN.
@@ -728,6 +735,11 @@ app.get('/art/*', (req, res) => {
   });
 });
 
+// Speaker album art, proxied and cached (see artProxy.js). Only known
+// speakers on :1400 art paths -- anything else is a 400.
+app.get('/api/art', (req, res) => { artProxy.handleRequest(req, res); });
+app.get('/api/art-stats', (req, res) => res.json(artProxy.getStats()));
+
 // Diagnostic: what does the SPEAKER say about the current session?
 // Queue mode vs direct URI, transport state, and -- the key field --
 // which transport actions the speaker will accept right now.
@@ -772,6 +784,16 @@ app.post('/api/local/room/:room/test-play', asyncHandler(async (req, res) => {
 async function main() {
   debugLog.info('server', 'Initializing Sonos...');
   await sonos.init();
+  artProxy.configure({
+    hostsProvider: sonos.getDeviceHosts,
+    dataDir: process.env.DATA_DIR || path.join(__dirname, '..', 'data')
+  });
+  // Background art warm-up, after the favorites/playlists metadata
+  // warm-up it reads from. Low priority and two at a time on one
+  // speaker; anything a screen asks for meanwhile jumps the queue.
+  sonos.getWarmArtUrls()
+    .then((urls) => artProxy.warm(urls))
+    .catch((err) => debugLog.warn('art', `Art warm-up failed: ${err.message}`));
   localLibrary.logStartupState();
   const scannerReady = localScanner.init({
     onProgress: (progress) => {
