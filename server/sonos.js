@@ -1687,11 +1687,27 @@ async function next(roomName) {
 // The incompatible-track check waits 600 ms and asks the speaker what it
 // landed on -- it used to run BEFORE the tap got its answer, adding ~0.7 s
 // to every skip. It only matters for Local Music Library files, so it now
-// runs after the response, and not at all when that library is off.
+// runs after the response, and not at all when that library is off (no
+// scanner database = nothing is ever marked incompatible; checking the DB
+// handle is also cheaper than localLibrary.isEnabled()'s stat of the
+// music folder, which can hang on a dead network mount).
+//
+// Answering first widens the window in which getNowPlaying's
+// guardQueueAhead can see the same incompatible track and skip as well
+// (two skips = a playable track skipped). Stamping its throttle and a
+// per-room in-flight flag keeps it to one skipper at a time.
+const backgroundSkipInFlight = new Set();
 function skipPastIncompatibleInBackground(roomName, device, direction) {
-  if (!localLibrary.isEnabled()) return;
+  if (!localScanner.getDatabase()) return;
+  if (backgroundSkipInFlight.has(roomName)) return;
+  backgroundSkipInFlight.add(roomName);
+  incompatibleSkipAt.set(roomName, Date.now());
   skipPastIncompatible(roomName, device, direction)
-    .catch((err) => debugLog.warn('sonos', `${direction}(${roomName}): incompatible-track check failed: ${err.message}`));
+    .catch((err) => debugLog.warn('sonos', `${direction}(${roomName}): incompatible-track check failed: ${err.message}`))
+    .finally(() => {
+      backgroundSkipInFlight.delete(roomName);
+      incompatibleSkipAt.set(roomName, Date.now());
+    });
 }
 
 async function previous(roomName) {
@@ -2565,15 +2581,20 @@ async function playViaQueue(device, roomName, uri, metadata) {
   throw lastErr;
 }
 
-// From the event-fed room cache (PlayState events + polls); unknown counts
-// as playing so the old, safe pause-and-settle path is kept.
-function isRoomKnownPlaying(roomName) {
-  const key = String(roomName || '').toLowerCase();
-  for (const [name, room] of lastRoomsByName) {
-    if (name.toLowerCase() === key) return room.playing !== false;
+// The transport state read live from the speaker ('playing',
+// 'transitioning', 'paused', 'stopped', ...), or null if it didn't answer.
+// Deliberately NOT device.getCurrentState(): that returns the library's
+// event-cached value, which lags right after a command (and freezes if a
+// subscription dies) -- exactly when playItemNow needs the truth.
+async function liveTransportState(device, label) {
+  try {
+    const info = await withTimeout(device.avTransportService().GetTransportInfo(), DEVICE_CALL_TIMEOUT_MS, `GetTransportInfo(${label})`);
+    return Helpers.TranslateState(info.CurrentTransportState);
+  } catch (err) {
+    return null;
   }
-  return true;
 }
+const SETTLED_IDLE_STATES = new Set(['paused', 'stopped', 'no_media']);
 
 async function playItemNow(roomName, uri, metadata) {
   if (usingMock) return;
@@ -2592,10 +2613,11 @@ async function playItemNow(roomName, uri, metadata) {
     // after it, plus a retry on setAVTransportURI itself, matching the
     // same pattern already used for the Play call below.
     //
-    // Only when the room is actually playing, though: a stopped/paused
-    // room has nothing to settle, and the fixed 300 ms was paid on every
-    // single source tap.
-    if (isRoomKnownPlaying(roomName)) {
+    // Skipped only when the speaker says it's settled and idle (paused /
+    // stopped): nothing to settle then, and the fixed 300 ms was paid on
+    // every source tap. Playing, TRANSITIONING (e.g. a second tap right
+    // after a first) or no answer keep the safe path.
+    if (!SETTLED_IDLE_STATES.has(await liveTransportState(device, roomName))) {
       await device.pause().catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
@@ -2634,17 +2656,23 @@ async function playItemNow(roomName, uri, metadata) {
     // setAVTransportURI does send its own Play straight after the URI
     // (node_modules/sonos/lib/sonos.js, unless the SOAP result is empty),
     // so this one is the safety net and no longer waits a fixed 400 ms
-    // first. If it's refused ("transition not available"), check whether
-    // the speaker is already starting up from the library's Play before
-    // retrying after a longer pause.
+    // first. A refusal ("transition not available") usually just means the
+    // library's Play is already starting it, so the live state decides:
+    // starting/playing is success; otherwise retry after a longer pause,
+    // and only report failure if the speaker still isn't starting.
+    const isStarting = (s) => s === 'playing' || s === 'transitioning';
     try {
       await device.play();
     } catch (err) {
-      const state = await device.getCurrentState().catch(() => null);
-      if (state === 'playing' || state === 'transitioning') return;
+      if (isStarting(await liveTransportState(device, roomName))) return;
       debugLog.warn('sonos', `playItem(${roomName}): initial Play failed (${err.message}), retrying once after a longer pause`);
       await new Promise((resolve) => setTimeout(resolve, 800));
-      await device.play();
+      try {
+        await device.play();
+      } catch (err2) {
+        if (isStarting(await liveTransportState(device, roomName))) return;
+        throw err2;
+      }
     }
   });
 }
