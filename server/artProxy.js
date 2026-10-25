@@ -51,6 +51,7 @@ const PER_HOST_LIMIT = 2;
 // A speaker that just timed out / refused a connection (asleep Roam,
 // rebooting) isn't picked as a spill-over target for a while.
 const HOST_FAIL_COOLDOWN_MS = 60 * 1000;
+const SPILL_RECENT_OK_MS = 15 * 60 * 1000;
 
 const MEMORY_MAX_BYTES = 40 * 1024 * 1024;
 const DISK_MAX_BYTES = 300 * 1024 * 1024;
@@ -88,32 +89,40 @@ function configure({ hostsProvider, dataDir }) {
   if (dataDir) dataRoot = dataDir;
   // Separate from the scanner's artcache/ (local-library covers, named
   // by album-folder hash) so pruning here can never delete those.
-  diskDir = path.join(dataRoot, 'artcache-remote');
-  try {
-    fs.mkdirSync(diskDir, { recursive: true });
-    for (const file of fs.readdirSync(diskDir)) {
-      const full = path.join(diskDir, file);
-      // Leftover from a write interrupted by a crash/restart.
-      if (file.endsWith('.tmp')) { try { fs.unlinkSync(full); } catch (err) { /* ignore */ } continue; }
-      const m = file.match(/^([a-f0-9]{40})\.(jpg|png|gif|webp)$/);
-      if (!m) continue;
-      const st = fs.statSync(full);
-      const prev = diskIndex.get(m[1]);
-      if (prev) {
-        // Two types for one image: keep the newer, delete the other.
-        const [keep, drop] = prev.mtimeMs >= st.mtimeMs ? [prev, { file }] : [{ file, size: st.size, mtimeMs: st.mtimeMs }, prev];
-        try { fs.unlinkSync(path.join(diskDir, drop.file)); } catch (err) { /* ignore */ }
-        if (keep === prev) continue;
-        diskBytes -= prev.size;
-      }
-      diskIndex.set(m[1], { file, size: st.size, mtimeMs: st.mtimeMs });
-      diskBytes += st.size;
-    }
+  // The index is built in the background: on an Unraid user share (FUSE)
+  // or a spun-down disk, stat-ing thousands of files can take seconds,
+  // and startup shouldn't wait for it. Until it's done the disk cache is
+  // simply off (diskDir stays null) and art comes from memory/speakers.
+  const dir = path.join(dataRoot, 'artcache-remote');
+  indexDiskCache(dir).then(() => {
+    diskDir = dir;
     pruneDisk();
     debugLog.info('art', `Remote art disk cache: ${diskIndex.size} file(s), ${(diskBytes / 1048576).toFixed(1)} MB`);
-  } catch (err) {
+  }).catch((err) => {
     debugLog.warn('art', `Remote art disk cache unavailable (memory only): ${err.message}`);
-    diskDir = null;
+  });
+}
+
+async function indexDiskCache(dir) {
+  await fs.promises.mkdir(dir, { recursive: true });
+  for (const file of await fs.promises.readdir(dir)) {
+    const full = path.join(dir, file);
+    // Leftover from a write interrupted by a crash/restart.
+    if (file.endsWith('.tmp')) { await fs.promises.unlink(full).catch(() => {}); continue; }
+    const m = file.match(/^([a-f0-9]{40})\.(jpg|png|gif|webp)$/);
+    if (!m) continue;
+    const st = await fs.promises.stat(full).catch(() => null);
+    if (!st) continue;
+    const prev = diskIndex.get(m[1]);
+    if (prev) {
+      // Two types for one image: keep the newer, delete the other.
+      const dropFile = prev.mtimeMs >= st.mtimeMs ? file : prev.file;
+      await fs.promises.unlink(path.join(dir, dropFile)).catch(() => {});
+      if (dropFile === file) continue;
+      diskBytes -= prev.size;
+    }
+    diskIndex.set(m[1], { file, size: st.size, mtimeMs: st.mtimeMs });
+    diskBytes += st.size;
   }
 }
 
@@ -188,7 +197,12 @@ function toClientUrl(url) {
 // later feeds back to the speakers in DIDL metadata -- those must keep
 // the original, speaker-reachable URL.
 function jsonReplacer(key, value) {
-  if (key === 'albumArtUrl' && typeof value === 'string') return toClientUrl(value);
+  // Cheap prefilter first: most art values (internet CDNs, our own
+  // /art/ library URLs) can't be speaker art, and new URL() on a relative
+  // path throws -- costly across a 200-row library page.
+  if (key === 'albumArtUrl' && typeof value === 'string' && value.startsWith('http://') && value.includes(':1400')) {
+    return toClientUrl(value);
+  }
   return value;
 }
 
@@ -220,11 +234,14 @@ function safeImageType(raw) {
 // "No art" answers are remembered per URL; capped so junk URLs can't
 // grow it forever (each key can be ~4 KB).
 const NEGATIVE_MAX_ENTRIES = 5000;
-function rememberMissing(key, ms) {
-  negative.set(key, Date.now() + ms);
+// transient = the speaker failed (timeout, 5xx, redirect) rather than
+// answering "no art" -- the browser must not cache that (see handleRequest).
+function rememberMissing(key, ms, transient) {
+  negative.delete(key); // re-insert at the back: insertion order = eviction order
+  negative.set(key, { until: Date.now() + ms, transient: !!transient });
   if (negative.size <= NEGATIVE_MAX_ENTRIES) return;
   const now = Date.now();
-  for (const [k, until] of negative) if (until <= now) negative.delete(k);
+  for (const [k, rec] of negative) if (rec.until <= now) negative.delete(k);
   for (const k of negative.keys()) {
     if (negative.size <= NEGATIVE_MAX_ENTRIES) break;
     negative.delete(k); // oldest first (insertion order)
@@ -302,25 +319,32 @@ function diskPut(key, entry) {
   });
 }
 
-// Oldest-first eviction down to the cap, plus anything past max age.
+// Oldest-written-first eviction, plus anything past max age. Once over
+// the cap it trims to 90% so a full cache doesn't re-sort on every write.
 function pruneDisk() {
   if (!diskDir) return;
   const now = Date.now();
+  const target = diskBytes > DISK_MAX_BYTES ? DISK_MAX_BYTES * 0.9 : DISK_MAX_BYTES;
   const byAge = [...diskIndex.entries()].sort((a, b) => a[1].mtimeMs - b[1].mtimeMs);
   for (const [hash, rec] of byAge) {
-    if (diskBytes <= DISK_MAX_BYTES && now - rec.mtimeMs < DISK_MAX_AGE_MS) break;
-    try { fs.unlinkSync(path.join(diskDir, rec.file)); } catch (err) { /* already gone */ }
+    if (diskBytes <= target && now - rec.mtimeMs < DISK_MAX_AGE_MS) break;
+    fs.promises.unlink(path.join(diskDir, rec.file)).catch(() => { /* already gone */ });
     diskIndex.delete(hash);
     diskBytes -= rec.size;
   }
 }
 
+// load() resolves to this (not null) when the speaker failed rather than
+// said "no art", so the route can answer "try again" instead of 404.
+const TRANSIENT = Object.freeze({ transient: true });
+
+// Returns null (no record), or the TRANSIENT / missing outcome to report.
 function negativeHit(key) {
-  const until = negative.get(key);
-  if (!until) return false;
-  if (Date.now() < until) return true;
+  const rec = negative.get(key);
+  if (!rec) return null;
+  if (Date.now() < rec.until) return rec.transient ? TRANSIENT : 'missing';
   negative.delete(key);
-  return false;
+  return null;
 }
 
 // ---------------------------------------------------------------------
@@ -331,7 +355,7 @@ const waiters = []; // { prefer, high, resolve } in arrival order
 
 function stateFor(host) {
   let s = hostState.get(host);
-  if (!s) { s = { active: 0, failUntil: 0 }; hostState.set(host, s); }
+  if (!s) { s = { active: 0, failUntil: 0, lastOkAt: 0 }; hostState.set(host, s); }
   return s;
 }
 
@@ -347,9 +371,12 @@ function pickHost(waiter) {
   let best = null;
   let bestActive = PER_HOST_LIMIT;
   const now = Date.now();
+  // Only speakers that served art recently: a sleeping Roam/Move is
+  // still "known" but would just eat the 4 s timeout on a visible image.
   for (const host of getKnownHosts()) {
     if (host === waiter.prefer) continue;
     const s = stateFor(host);
+    if (now - s.lastOkAt > SPILL_RECENT_OK_MS) continue;
     if (s.active < bestActive && now >= s.failUntil) { best = host; bestActive = s.active; }
   }
   if (best) return best;
@@ -444,6 +471,16 @@ async function localArtFor(key) {
 // ---------------------------------------------------------------------
 // Fetching
 // ---------------------------------------------------------------------
+function sniffImageType(data) {
+  const b = data ? Buffer.from(data) : null;
+  if (!b || b.length < 12) return null;
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b[0] === 0x89 && b.toString('latin1', 1, 4) === 'PNG') return 'image/png';
+  if (b.toString('latin1', 0, 4) === 'GIF8') return 'image/gif';
+  if (b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
 async function fetchFromSpeaker(host, key) {
   const res = await axios.get(`http://${host}:${SPEAKER_PORT}${key}`, {
     responseType: 'arraybuffer',
@@ -455,7 +492,9 @@ async function fetchFromSpeaker(host, key) {
     maxRedirects: 0,
     validateStatus: () => true
   });
-  const type = safeImageType(res.headers['content-type']);
+  // Some replies carry no or a generic content type (the browser used to
+  // sniff those); recognise the raster formats by their first bytes.
+  const type = safeImageType(res.headers['content-type']) || (res.status === 200 ? sniffImageType(res.data) : null);
   if (res.status === 200 && type && res.data && res.data.length > 0) {
     return { entry: { buf: Buffer.from(res.data), type } };
   }
@@ -467,7 +506,8 @@ async function fetchFromSpeaker(host, key) {
 function load(key, prefer, high) {
   const hit = memGet(key);
   if (hit) { stats.mem++; return Promise.resolve(Object.assign({ source: 'mem' }, hit)); }
-  if (negativeHit(key)) return Promise.resolve(null);
+  const known = negativeHit(key);
+  if (known) return Promise.resolve(known === TRANSIENT ? TRANSIENT : null);
   const pending = inflight.get(key);
   if (pending) {
     // Someone is looking at this image NOW while the warm-up has it
@@ -491,6 +531,7 @@ function load(key, prefer, high) {
       let unhealthy = false;
       try {
         const result = await fetchFromSpeaker(host, key);
+        stateFor(host).lastOkAt = Date.now(); // it answered (even a 404 means awake)
         if (result.entry) {
           stats.fetched++;
           memPut(key, result.entry);
@@ -498,16 +539,19 @@ function load(key, prefer, high) {
           return Object.assign({ source: 'speaker' }, result.entry);
         }
         stats.missing++;
-        rememberMissing(key, result.status === 404 ? NEGATIVE_404_MS : NEGATIVE_ERROR_MS);
-        return null;
+        // Only a clean "no image" answer (404, or 200 that isn't a raster
+        // image) is real absence; 5xx/3xx/etc. are the speaker struggling.
+        const absent = result.status === 404 || result.status === 200;
+        rememberMissing(key, absent ? NEGATIVE_404_MS : NEGATIVE_ERROR_MS, !absent);
+        return absent ? null : TRANSIENT;
       } catch (err) {
         unhealthy = true;
         target = pickRetryHost(host);
         if (attempt === 2 || !target) {
           stats.failed++;
           debugLog.warn('art', `art fetch failed from ${host}: ${err.message}`);
-          rememberMissing(key, NEGATIVE_ERROR_MS);
-          return null;
+          rememberMissing(key, NEGATIVE_ERROR_MS, true);
+          return TRANSIENT;
         }
       } finally {
         release(host, unhealthy);
@@ -544,12 +588,18 @@ async function handleRequest(req, res) {
   }
   try {
     const entry = await load(parsed.key, parsed.host, true);
+    if (entry === TRANSIENT) {
+      // Speaker hiccup (rebooting, busy, timed out): never let the
+      // browser remember this, or tiles stay blank long after it recovers.
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(503).end();
+    }
     if (!entry) {
       // The panel shows art as CSS background-image, so a 404 simply
       // leaves the tile blank / falls through to the service icon.
       // Cached briefly by the browser too, so the same dead URL isn't
       // re-asked on every render.
-      res.setHeader('Cache-Control', 'public, max-age=600');
+      res.setHeader('Cache-Control', 'public, max-age=300');
       return res.status(404).end();
     }
     res.setHeader('Content-Type', entry.type);
@@ -587,7 +637,7 @@ async function warm(urls) {
     while (next < todo.length) {
       const { key, host } = todo[next++];
       const entry = await load(key, host, false).catch(() => null);
-      if (entry) got++; else none++;
+      if (entry && entry.buf) got++; else none++;
     }
   }
   await Promise.all([worker(), worker()]);
