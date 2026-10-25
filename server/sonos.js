@@ -446,6 +446,7 @@ function attachDeviceEventListeners(name, device) {
       const previous = groupVolumeByRoom.get(name);
       const volume = parsed.volume !== null ? parsed.volume : (previous ? previous.volume : null);
       const muted = parsed.muted !== null ? parsed.muted : (previous ? previous.muted : false);
+      groupVolumeChangeSeq++;
       if (volume !== null) groupVolumeByRoom.set(name, { volume, muted, at: Date.now(), fromEvent: true });
       if (coordinatorNameFor(name) !== name) return;
       if (groupVolumeChangedCallback) groupVolumeChangedCallback(name, volume !== null ? { volume, muted } : null);
@@ -518,7 +519,12 @@ function parseGroupRenderingBody(body) {
   return out;
 }
 
+// Bumped on every group-volume event and invalidation, so a read that
+// was already out when one happened knows not to cache its older answer.
+let groupVolumeChangeSeq = 0;
+
 function invalidateGroupVolume(roomName) {
+  groupVolumeChangeSeq++;
   if (!roomName) {
     groupVolumeByRoom.clear();
     return;
@@ -588,6 +594,29 @@ const GLOBAL_EVENT_ENDPOINTS = [
 const lastEventAt = new WeakMap(); // device -> ms timestamp of last NOTIFY
 const subscriptionCheckAt = new WeakMap(); // device -> last ensureSubscribed start
 const subscriptionCheckInFlight = new WeakSet();
+const pendingSubscribeTo = new WeakMap(); // device -> in-flight Listener.subscribeTo
+const RENEW_SETTLE_MS = 15000;
+
+// More than one SID for the same endpoint (left over from an earlier race,
+// or from the library re-adding in parallel) means every NOTIFY is
+// handled twice. Keep the one renewed furthest into the future and
+// unsubscribe the rest.
+async function dropDuplicateSubscriptions(sub, name) {
+  const byEndpoint = new Map();
+  for (const [sid, s] of Object.entries(sub.subscriptions || {})) {
+    if (!byEndpoint.has(s.endpoint)) byEndpoint.set(s.endpoint, []);
+    byEndpoint.get(s.endpoint).push([sid, s]);
+  }
+  for (const [endpoint, list] of byEndpoint) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => new Date(b[1].renew_at) - new Date(a[1].renew_at));
+    for (const [sid] of list.slice(1)) {
+      await withTimeout(sub.cancelSubscription(sid), DEVICE_CALL_TIMEOUT_MS, `unsubscribe ${endpoint} (${name})`)
+        .catch(() => { delete sub.subscriptions[sid]; }); // gone on the speaker side anyway
+    }
+    debugLog.info('sonos', `Dropped ${list.length - 1} duplicate event subscription(s) for ${endpoint} on ${name}`);
+  }
+}
 
 async function ensureSubscribed(device, name, reason) {
   if (usingMock || !device || subscriptionCheckInFlight.has(device)) return;
@@ -603,17 +632,35 @@ async function ensureSubscribed(device, name, reason) {
       // Hole (3): the first subscribeTo failed part-way, so the library
       // never kept the subscription but still thinks it's subscribed.
       // Clearing the flag lets subscribeTo run for real.
+      // A subscribeTo that outlived its timeout last time may still land;
+      // starting another on top would subscribe the device twice.
+      if (pendingSubscribeTo.has(device)) return;
       debugLog.info('sonos', `Subscribing ${name} to events (${reason}; no live subscription found)`);
       device._isSubscribed = false;
-      await withTimeout(Listener.subscribeTo(device), DEVICE_CALL_TIMEOUT_MS * 2, `subscribeTo(${name})`);
+      const p = Listener.subscribeTo(device).finally(() => pendingSubscribeTo.delete(device));
+      pendingSubscribeTo.set(device, p);
+      await withTimeout(p, DEVICE_CALL_TIMEOUT_MS * 2, `subscribeTo(${name})`);
       return;
     }
     // Renew whatever the library still has (a rejected SID becomes a
-    // fresh SUBSCRIBE inside the library), then re-add any endpoint it
-    // dropped after a failed resubscribe.
-    await withTimeout(sub.renewAllSubscriptions(), DEVICE_CALL_TIMEOUT_MS * 2, `renew(${name})`).catch((err) => {
-      debugLog.warn('sonos', `Event renewal for ${name} failed, re-adding what's missing: ${err.message}`);
-    });
+    // fresh SUBSCRIBE inside the library, in the background of that
+    // renew's promise). Every renewal must have SETTLED before we look
+    // for missing endpoints -- reading the list while a library re-add is
+    // still in flight would add that endpoint a second time (two SIDs,
+    // every event handled twice). If they don't all settle in time, leave
+    // the reconcile to the next check rather than guess.
+    const renewals = Object.keys(sub.subscriptions).map((sid) => sub.renewSubscription(sid));
+    const settled = await Promise.race([
+      Promise.allSettled(renewals),
+      new Promise((resolve) => setTimeout(() => resolve(null), RENEW_SETTLE_MS))
+    ]);
+    if (!settled) {
+      debugLog.warn('sonos', `Event renewal for ${name} still running after ${RENEW_SETTLE_MS} ms; will reconcile on the next check`);
+      return;
+    }
+    const failed = settled.filter((r) => r.status === 'rejected').length;
+    if (failed > 0) debugLog.warn('sonos', `Event renewal for ${name}: ${failed} of ${settled.length} failed, re-adding what's missing`);
+    await dropDuplicateSubscriptions(sub, name);
     const expected = sub === subs[0] ? GLOBAL_EVENT_ENDPOINTS.concat(DEVICE_EVENT_ENDPOINTS) : DEVICE_EVENT_ENDPOINTS;
     const have = new Set(Object.keys(sub.subscriptions).map((sid) => sub.subscriptions[sid].endpoint));
     const missing = expected.filter((ep) => !have.has(ep));
@@ -956,6 +1003,32 @@ async function getRoomNameByUUID(uuid) {
   return found;
 }
 
+// A poll lasts as long as its slowest speaker (seconds, with one
+// unplugged). A Volume/PlayState event that lands while a device's read
+// is still out is NEWER than that read -- merging the read over it would
+// flip the screen back to the old value until the next event, which may
+// never come. So for any device that sent an event after its read
+// started, the event-fed fields win.
+async function readDeviceLiveKeepingNewerEvents(device, name) {
+  const startedAt = Date.now();
+  const live = await readDeviceLive(device, name);
+  const current = lastRoomsByName.get(name);
+  if (current && live.reachable !== false && (lastEventAt.get(device) || 0) > startedAt) {
+    return { ...live, volume: current.volume, playing: current.playing, muted: current.muted };
+  }
+  return live;
+}
+
+// The poll is the fallback when group-volume events are missing: if a
+// member's own volume changed since the last look, its coordinator's
+// cached group volume is out of date.
+function forgetGroupVolumesWhereMembersMoved(freshRooms) {
+  for (const r of freshRooms) {
+    const prev = lastRoomsByName.get(r.name);
+    if (prev && prev.volume !== r.volume) invalidateGroupVolume(r.coordinator || r.name);
+  }
+}
+
 async function getRooms() {
   if (usingMock) return [...mockState.rooms].sort((a, b) => a.name.localeCompare(b.name));
   return guarded('getRooms', async () => {
@@ -970,11 +1043,17 @@ async function getRooms() {
     const rooms = await Promise.all(
       [...devicesByName.entries()].map(async ([key, device]) => {
         const name = displayNameByKey.get(key) || key;
-        const live = await readDeviceLive(device, name);
+        const live = await readDeviceLiveKeepingNewerEvents(device, name);
         return { name, ...live, coordinator: coordinatorMap[name] || name };
       })
     );
     rooms.sort((a, b) => a.name.localeCompare(b.name));
+    // A grouping change seen here first (ZonesChanged normally clears it)
+    // or a member's volume moving underneath it means the cached group
+    // volume is no longer the truth.
+    const topologyChanged = rooms.some((r) => { const prev = lastRoomsByName.get(r.name); return prev && prev.coordinator !== r.coordinator; });
+    if (topologyChanged) invalidateGroupVolume(null);
+    else forgetGroupVolumesWhereMembersMoved(rooms);
     lastRoomsByName = new Map(rooms.map((r) => [r.name, r]));
     return sanitizeRoomsForClient(rooms);
   });
@@ -1001,11 +1080,12 @@ async function getRoomsTargeted(targetRoomNames) {
         .filter(([key]) => targets.has(displayNameByKey.get(key) || key))
         .map(async ([key, device]) => {
           const name = displayNameByKey.get(key) || key;
-          const live = await readDeviceLive(device, name);
+          const live = await readDeviceLiveKeepingNewerEvents(device, name);
           return { name, ...live, coordinator: lastCoordinatorMap[name] || name };
         })
     );
 
+    forgetGroupVolumesWhereMembersMoved(updates);
     updates.forEach((room) => lastRoomsByName.set(room.name, room));
     return sanitizeRoomsForClient([...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name)));
   });
@@ -1029,12 +1109,14 @@ async function getGroupVolume(roomName) {
   const cached = cachedGroupVolume(roomName);
   if (cached) return cached.volume;
   return guarded(`getGroupVolume(${roomName})`, async () => {
+    const seqAtStart = groupVolumeChangeSeq;
     const groupRendering = new Services.GroupRenderingControl(device.host, device.port);
     const volume = await groupRendering.GetGroupVolume();
     // Keep the event-fed muted flag if there is one; a read is only
-    // trusted briefly (GROUP_VOLUME_POLL_TTL_MS).
+    // trusted briefly (GROUP_VOLUME_POLL_TTL_MS). Not cached at all if a
+    // set or an event happened while it was out -- it may predate them.
     const previous = groupVolumeByRoom.get(roomName);
-    if (Number.isFinite(volume)) {
+    if (Number.isFinite(volume) && seqAtStart === groupVolumeChangeSeq) {
       groupVolumeByRoom.set(roomName, { volume, muted: previous ? previous.muted : false, at: Date.now(), fromEvent: false });
     }
     return volume;
