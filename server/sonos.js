@@ -1395,6 +1395,10 @@ function getNowPlayingShared(roomName) {
     (track) => {
       entry.pending = false;
       entry.at = Date.now();
+      // Nothing to share for an unknown room (or a failed lookup) -- and
+      // keeping it would let arbitrary /nowplaying/<name> requests grow
+      // the map until the next action clears it.
+      if (!track && nowPlayingShared.get(key) === entry) nowPlayingShared.delete(key);
       return track ? { ...track, asOf: startedAt } : track;
     },
     (err) => {
@@ -3069,6 +3073,7 @@ module.exports = {
   getNowPlaying,
   getNowPlayingShared,
   invalidateNowPlaying,
+  coordinatorNameFor,
   play,
   pause,
   next,

@@ -164,6 +164,10 @@ function asyncHandler(fn) {
       if (!res.headersSent) {
         res.status(500).json({ error: err.message });
       }
+    }).finally(() => {
+      // Second half of the now-playing cache drop (see the /api
+      // middleware below): the action has really finished now.
+      if (changesNowPlaying(req)) sonos.invalidateNowPlaying(null);
     });
   };
 }
@@ -205,12 +209,17 @@ app.get('/api/config', (req, res) => {
 // crossfade, sleep timer don't), hence one catch-all here instead of a
 // line in each route. Every room is dropped, not just the one in the URL:
 // grouping changes what the members show, and Local Library plays live
-// under /api/local. Dropped both before the action runs and again once
-// it has answered, so a lookup that started mid-action isn't reused.
+// under /api/local. Dropped before the action runs here, and again once
+// it has finished in asyncHandler (so a lookup that started mid-action
+// isn't reused even if the screen disconnected before the answer).
+// Volume/EQ/passcode requests are exempt: they don't change anything the
+// now-playing payload shows, and a slider drag sends a stream of them.
+const NOW_PLAYING_NEUTRAL_POST = /\/(volume|group-volume|group-volume\/snapshot|mute|group-mute|bass|treble|loudness|verify-passcode)$/;
+function changesNowPlaying(req) {
+  return req.method !== 'GET' && req.originalUrl.startsWith('/api/') && !NOW_PLAYING_NEUTRAL_POST.test(req.path);
+}
 app.use('/api', (req, res, next) => {
-  if (req.method === 'GET') return next();
-  sonos.invalidateNowPlaying(null);
-  res.on('finish', () => sonos.invalidateNowPlaying(null));
+  if (changesNowPlaying(req)) sonos.invalidateNowPlaying(null);
   next();
 });
 
@@ -893,22 +902,35 @@ async function main() {
   // /nowplaying route uses. If the lookup fails the bare signal still goes
   // out and screens fall back to fetching, exactly as before. (The group
   // volume signal below stays a bare "go re-check".)
+  //
+  // Only group COORDINATORS get the lookup: every member speaker mirrors
+  // the coordinator's transport and fires its own events, so a play on a
+  // whole-house group would otherwise mean one full lookup per speaker,
+  // all at once, while they're transitioning. Members get the bare
+  // signal, and only a screen actually focused on one fetches it.
   const NOWPLAYING_PUSH_DEBOUNCE_MS = 250;
-  const nowPlayingPushTimers = new Map();
-  sonos.onNowPlayingChanged((room) => {
-    scheduleInUsePush();
-    clearTimeout(nowPlayingPushTimers.get(room));
-    nowPlayingPushTimers.set(room, setTimeout(async () => {
-      nowPlayingPushTimers.delete(room);
-      if (wss.clients.size === 0) return; // nobody to tell; skip the speaker round trip
-      let track;
+  const NOWPLAYING_PUSH_MAX_WAIT_MS = 1000; // a steady event stream can't hold the push back forever
+  const nowPlayingPushTimers = new Map(); // room -> { timer, firstAt }
+  async function pushNowPlaying(room) {
+    nowPlayingPushTimers.delete(room);
+    if (wss.clients.size === 0) return; // nobody to tell; skip the speaker round trip
+    let track;
+    if (sonos.coordinatorNameFor(room) === room) {
       try {
         track = await sonos.getNowPlayingShared(room);
       } catch (err) {
         track = undefined;
       }
-      broadcast(track ? { type: 'sonos:nowplaying-changed', room, track } : { type: 'sonos:nowplaying-changed', room });
-    }, NOWPLAYING_PUSH_DEBOUNCE_MS));
+    }
+    broadcast(track ? { type: 'sonos:nowplaying-changed', room, track } : { type: 'sonos:nowplaying-changed', room });
+  }
+  sonos.onNowPlayingChanged((room) => {
+    scheduleInUsePush();
+    const pending = nowPlayingPushTimers.get(room);
+    const firstAt = pending ? pending.firstAt : Date.now();
+    if (pending) clearTimeout(pending.timer);
+    const delay = Math.max(0, Math.min(NOWPLAYING_PUSH_DEBOUNCE_MS, firstAt + NOWPLAYING_PUSH_MAX_WAIT_MS - Date.now()));
+    nowPlayingPushTimers.set(room, { firstAt, timer: setTimeout(() => pushNowPlaying(room), delay) });
   });
   sonos.onGroupVolumeChanged(() => {
     broadcast({ type: 'sonos:groupvolume-changed' });

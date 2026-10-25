@@ -529,6 +529,13 @@ const SonosView = (() => {
     // before repainting made a tap feel ignored on the slow wall panel.
     render();
     updateGroupLabel();
+    const cached = nowPlayingByRoom.get(roomName);
+    if (cached) {
+      renderNowPlaying(cached);
+    } else {
+      const live = rooms.find((r) => r.name === roomName);
+      if (live && !pendingPlayStateFor(roomName)) setPlayButton(!!live.playing);
+    }
     await Promise.all([refreshNowPlaying(), syncVolumeRailToFocusedRoom()]);
   }
 
@@ -728,7 +735,7 @@ const SonosView = (() => {
   function showRoomUnreachableNotice(failedRooms) {
     const original = artistEl.textContent;
     artistEl.textContent = `Couldn't reach: ${failedRooms.join(', ')}`;
-    setTimeout(() => { refreshNowPlaying(); }, 3000);
+    setTimeout(() => { refreshNowPlaying().catch(() => {}); }, 3000);
   }
 
   roomlistBackBtn.addEventListener('click', () => {
@@ -1070,14 +1077,23 @@ const SonosView = (() => {
     }
     nowPlayingInFlight = (async () => {
       try {
+        let lastError = null;
         do {
           nowPlayingAgain = false;
+          lastError = null;
           const room = focusedRoom;
-          const track = await api(`/api/sonos/nowplaying/${encodeURIComponent(room)}`);
-          // Focus moved while this was out: drop it, the room switch
-          // already asked for another round.
-          if (room === focusedRoom) renderNowPlaying(track);
+          try {
+            const track = await api(`/api/sonos/nowplaying/${encodeURIComponent(room)}`);
+            // Focus moved while this was out: drop it, the room switch
+            // already asked for another round.
+            if (room === focusedRoom) renderNowPlaying(track);
+          } catch (err) {
+            // A blip on one round mustn't cancel the fresh round someone
+            // asked for meanwhile (e.g. right after toggling shuffle).
+            lastError = err;
+          }
         } while (nowPlayingAgain && focusedRoom);
+        if (lastError) throw lastError;
       } finally {
         nowPlayingInFlight = null;
       }
@@ -1102,14 +1118,24 @@ const SonosView = (() => {
   const PLAY_STATE_HOLD_MS = 10000;
   let pendingPlayState = null; // { room, playing, until }
 
+  let playPauseInFlight = false; // one play/pause POST at a time (see the tap handler)
+
   function pendingPlayStateFor(room) {
     if (!pendingPlayState) return null;
-    if (pendingPlayState.room !== room || Date.now() > pendingPlayState.until) {
+    if (Date.now() > pendingPlayState.until) {
       pendingPlayState = null;
       return null;
     }
-    return pendingPlayState;
+    // Kept (not cleared) for another room: switching away and back during
+    // the hold must not drop it while the stream is still transitioning.
+    return pendingPlayState.room === room ? pendingPlayState : null;
   }
+
+  // Last now-playing seen per room, so switching rooms can paint at once
+  // from what we had instead of showing the previous room's track (and
+  // play state -- tapping play/pause then would send the wrong action)
+  // until the speaker answers.
+  const nowPlayingByRoom = new Map();
 
   function setPlayButton(playing) {
     currentlyPlaying = playing;
@@ -1135,11 +1161,14 @@ const SonosView = (() => {
       lastRenderedAsOf = 0;
     }
     if (track && track.asOf) {
-      if (track.asOf < lastRenderedAsOf) return;
+      // A result more than 30 s "older" can only mean the server's clock
+      // stepped back (NTP fix, restart) -- accept it rather than freeze.
+      if (track.asOf < lastRenderedAsOf && lastRenderedAsOf - track.asOf < 30000) return;
       lastRenderedAsOf = track.asOf;
     }
     lastNowPlayingRenderAt = Date.now();
     lastNowPlayingTrack = track;
+    if (track) nowPlayingByRoom.set(focusedRoom, track);
     updateGroupLabel();
     // "Up Next" only exists for queue-backed playback (playlists,
     // local albums, anything driving the queue) -- hidden otherwise.
@@ -1278,24 +1307,36 @@ const SonosView = (() => {
     // is held there until the speaker agrees (see pendingPlayState). The
     // server pushes the new now-playing once the speaker's events settle;
     // the delayed refresh below is only a fallback for when they don't.
+    //
+    // One POST at a time: a quick double tap would otherwise send play
+    // and pause together, and the speaker may run them in either order.
+    if (playPauseInFlight) return;
+    playPauseInFlight = true;
     const room = focusedRoom;
     const wasPlaying = currentlyPlaying;
     const action = wasPlaying ? 'pause' : 'play';
-    pendingPlayState = { room, playing: !wasPlaying, until: Date.now() + PLAY_STATE_HOLD_MS };
+    const pending = { room, playing: !wasPlaying, until: Date.now() + PLAY_STATE_HOLD_MS };
+    pendingPlayState = pending;
     setPlayButton(!wasPlaying);
-    if (lastNowPlayingTrack) {
-      progress.update(lastNowPlayingTrack.position, lastNowPlayingTrack.duration, !wasPlaying);
-    }
+    progress.setPlaying(!wasPlaying);
+    // When the hold runs out without the speaker agreeing, go and ask
+    // rather than leave the guess on screen until something else renders.
+    setTimeout(() => {
+      if (pendingPlayState === pending) scheduleNowPlayingRefresh(0);
+    }, PLAY_STATE_HOLD_MS + 100);
     let result;
     try {
       result = await api(`/api/sonos/room/${encodeURIComponent(room)}/${action}`, { method: 'POST' });
     } catch (err) {
       result = { error: err.message };
+    } finally {
+      playPauseInFlight = false;
     }
     if (result && result.error) {
-      if (pendingPlayState && pendingPlayState.room === room) pendingPlayState = null;
+      if (pendingPlayState === pending) pendingPlayState = null;
       if (room === focusedRoom) {
         setPlayButton(wasPlaying);
+        progress.setPlaying(wasPlaying);
         artistEl.textContent = wasPlaying ? "Can't pause right now" : "Can't play right now";
       }
       scheduleNowPlayingRefresh(2000);
@@ -1309,10 +1350,12 @@ const SonosView = (() => {
   async function skip(direction) {
     if (!focusedRoom) return;
     const room = focusedRoom;
-    const next = direction === 'next' && lastNowPlayingTrack && lastNowPlayingTrack.nextTrack;
+    const shownBefore = lastNowPlayingTrack;
+    const next = direction === 'next' && shownBefore && shownBefore.nextTrack;
     if (next && next.title) {
       titleEl.textContent = next.title;
       artistEl.textContent = next.artist || ' ';
+      if (upNextEl) upNextEl.style.display = 'none'; // it would name the song now in the title
       progress.update(0, 0, currentlyPlaying);
     }
     let result;
@@ -1323,6 +1366,8 @@ const SonosView = (() => {
     }
     if (result && result.error) {
       if (room === focusedRoom) {
+        // Put back what was showing before the guess, then the message.
+        if (next && next.title && shownBefore === lastNowPlayingTrack) renderNowPlaying(shownBefore);
         artistEl.textContent = direction === 'next' ? "Can't skip right now" : "Can't skip back right now";
       }
       scheduleNowPlayingRefresh(2000);
@@ -2223,7 +2268,7 @@ const SonosView = (() => {
             if (!(await postPlay('play-item', { uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null }, item.title))) return;
           }
           await openSourceGroups();
-          setTimeout(refreshNowPlaying, 800);
+          setTimeout(() => refreshNowPlaying().catch(() => {}), 800);
         });
         li.appendChild(buildQueueButton(item.title, { uri: item.uri, metadata: item.metadata }));
         li.appendChild(buildAddToPlaylistButton(item.title, { uri: item.uri, metadata: item.metadata }));
@@ -2383,7 +2428,7 @@ const SonosView = (() => {
             body: JSON.stringify({ sourceRoom: item.roomName })
           });
           await openSourceGroups();
-          setTimeout(refreshNowPlaying, 800);
+          setTimeout(() => refreshNowPlaying().catch(() => {}), 800);
         } else if (playlistContainerId && item.uri) {
           // A track within a playlist -- build the actual queue from
           // the whole playlist and jump to this track, rather than
@@ -2392,11 +2437,11 @@ const SonosView = (() => {
           // to skip to at all).
           if (!(await postPlay('play-playlist-track', { playlistId: playlistContainerId, playlistTitle, uri: item.uri }, item.title))) return;
           await openSourceGroups();
-          setTimeout(refreshNowPlaying, 800);
+          setTimeout(() => refreshNowPlaying().catch(() => {}), 800);
         } else if (item.uri) {
           if (!(await postPlay('play-item', { uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null }, item.title))) return;
           await openSourceGroups();
-          setTimeout(refreshNowPlaying, 800);
+          setTimeout(() => refreshNowPlaying().catch(() => {}), 800);
         } else {
           showPreviewMessage(`"${item.title}" doesn't have a playable link -- check DBG panel for details.`);
         }
@@ -2488,10 +2533,19 @@ const SonosView = (() => {
     // The server now sends the new now-playing along with the signal;
     // render it directly. Older servers (or a failed lookup) send the
     // bare signal -- then fetch, debounced, as before.
+    //
+    // The server only attaches a payload for group coordinators. A screen
+    // focused on a group MEMBER fetches its own view when either the
+    // member or its coordinator signals.
     handleNowPlayingChanged(room, track) {
-      if (room !== focusedRoom) return;
-      if (track) renderNowPlaying(track);
-      else scheduleNowPlayingRefresh();
+      if (!focusedRoom) return;
+      if (room === focusedRoom) {
+        if (track) renderNowPlaying(track);
+        else scheduleNowPlayingRefresh();
+        return;
+      }
+      const focused = rooms.find((r) => r.name === focusedRoom);
+      if (focused && focused.coordinator === room) scheduleNowPlayingRefresh();
     },
     async handleGroupVolumeChanged() {
       await syncVolumeRailToFocusedRoom();

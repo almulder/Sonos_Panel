@@ -49,6 +49,14 @@ function createProgressBar({ elapsedEl, remainingEl, fillEl }) {
       render();
       if (playing) startTicking();
       else stopTicking();
+    },
+    // Optimistic play/pause: start/stop the ticker from where it is now.
+    // (update() with the last server position would jump back, since
+    // that can be many seconds old.)
+    setPlaying(newPlaying) {
+      playing = !!newPlaying;
+      if (playing) startTicking();
+      else stopTicking();
     }
   };
 }
