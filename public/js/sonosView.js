@@ -1491,16 +1491,59 @@ const SonosView = (() => {
     prefetchArtwork(data.groups || []); // fire-and-forget, doesn't block the UI
   }
 
-  // The server now warms its own Favorites/Playlists metadata cache at
-  // startup, but that only covers track names/services -- the actual
-  // album art images are served directly by each Sonos speaker to the
-  // browser, entirely outside anything the server caches. Confirmed via
-  // testing: metadata was warm immediately, but art still only started
-  // loading the moment a screen was actually opened. This prefetches the
-  // real image bytes into the browser's own cache in the background, so
-  // by the time someone actually taps into Favorites or Playlists, the
-  // pictures are already sitting there instead of loading fresh.
+  // Prefetches Favorites/Playlists artwork into the browser's own cache
+  // so tapping into them shows pictures immediately.
+  //
+  // Speaker art now comes through the server's /api/art proxy, which
+  // warms its own cache at startup -- so this mostly moves already-cached
+  // bytes from our server into the browser. What it must NOT do any more
+  // is what it used to: fire every image at once on every visit to the
+  // Sources home. That flooded one speaker (it answers art requests one
+  // at a time: ~29 requests stair-stepped to 5.5s) and filled the
+  // browser's 6-connections-per-host pool, delaying the now-playing
+  // cover and the API calls that now share our host. So:
+  //   - it waits until the page is idle (after the first now-playing
+  //     render, which init() does before opening Sources);
+  //   - runs at most once per PREFETCH_INTERVAL_MS, not on every Back;
+  //   - fetches playlist track lists one at a time, not all in parallel;
+  //   - loads images 2 at a time, skipping any URL already requested.
+  const PREFETCH_INTERVAL_MS = 30 * 60 * 1000;
+  const PREFETCH_IMAGE_CONCURRENCY = 2;
+  const prefetchedArt = new Set();
+  let lastPrefetchAt = 0;
+
+  function whenIdle() {
+    return new Promise((resolve) => {
+      // Fixed head start first: the now-playing cover and the visible
+      // Sources tiles get the connections before any prefetch does.
+      setTimeout(() => {
+        if (window.requestIdleCallback) window.requestIdleCallback(() => resolve(), { timeout: 5000 });
+        else resolve();
+      }, 2000);
+    });
+  }
+
+  function loadImagesQueued(urls) {
+    const queue = urls.filter((u) => u && !prefetchedArt.has(u));
+    queue.forEach((u) => prefetchedArt.add(u));
+    let next = 0;
+    function worker() {
+      if (next >= queue.length) return Promise.resolve();
+      const url = queue[next++];
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = img.onerror = resolve;
+        img.src = url;
+      }).then(worker);
+    }
+    return Promise.all(Array.from({ length: PREFETCH_IMAGE_CONCURRENCY }, worker));
+  }
+
   async function prefetchArtwork(groups) {
+    if (Date.now() - lastPrefetchAt < PREFETCH_INTERVAL_MS) return;
+    lastPrefetchAt = Date.now();
+    await whenIdle();
+    const urls = [];
     for (const group of groups) {
       if (group.isLineInRoot) continue; // no artwork to prefetch
       // Music Library is browsed on demand and can be enormous -- never
@@ -1511,26 +1554,19 @@ const SonosView = (() => {
         if (group.isPlaylistRoot) {
           const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/playlists`);
           const playlists = data.items || [];
-          const trackLists = await Promise.all(
-            playlists.map((pl) =>
-              api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(pl.id)}`)
-                .then((d) => d.items || [])
-                .catch(() => [])
-            )
-          );
-          items = trackLists.flat();
+          items = playlists.slice();
+          for (const pl of playlists) {
+            const d = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(pl.id)}`)
+              .catch(() => ({}));
+            items.push(...(d.items || []));
+          }
         } else {
           const data = await api(
             `/api/sonos/room/${encodeURIComponent(focusedRoom)}/favorites-by-group?group=${encodeURIComponent(group.title)}`
           );
           items = data.items || [];
         }
-        items.forEach((item) => {
-          if (item.albumArtUrl) {
-            const img = new Image();
-            img.src = item.albumArtUrl;
-          }
-        });
+        items.forEach((item) => urls.push(item.albumArtUrl));
       } catch (err) {
         // Best-effort per group -- one group failing (timeout, error,
         // etc) shouldn't stop every other group from being prefetched.
@@ -1541,6 +1577,7 @@ const SonosView = (() => {
         // playlist" (the prefetch never got that far).
       }
     }
+    await loadImagesQueued(urls);
   }
 
   async function openGroup(group) {

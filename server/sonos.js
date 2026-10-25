@@ -37,6 +37,7 @@ const debugLog = require('./debugLog');
 const localLibrary = require('./localLibrary');
 const localBrowse = require('./localBrowse');
 const localScanner = require('./localScanner');
+const artProxy = require('./artProxy');
 
 // Manual overrides that are more reliable than guessing at UPnP fields --
 // see getLineInRooms() for why this exists. Missing/invalid config.json
@@ -311,12 +312,16 @@ async function init() {
     // fallback-to-mock logic below.
     const anyRoomName = displayNameByKey.values().next().value;
     if (anyRoomName) {
-      getFavorites(anyRoomName).catch((err) => {
-        debugLog.warn('sonos', `Startup favorites warm-up failed (will retry on first real request): ${err.message}`);
-      });
-      getPlaylists(anyRoomName).catch((err) => {
-        debugLog.warn('sonos', `Startup playlists warm-up failed (will retry on first real request): ${err.message}`);
-      });
+      // Kept as one promise so the album-art warm-up (getWarmArtUrls)
+      // can start right after, from the same freshly cached lists.
+      startupWarmup = Promise.allSettled([
+        getFavorites(anyRoomName).catch((err) => {
+          debugLog.warn('sonos', `Startup favorites warm-up failed (will retry on first real request): ${err.message}`);
+        }),
+        getPlaylists(anyRoomName).catch((err) => {
+          debugLog.warn('sonos', `Startup playlists warm-up failed (will retry on first real request): ${err.message}`);
+        })
+      ]);
     }
   } catch (err) {
     usingMock = true;
@@ -326,6 +331,34 @@ async function init() {
 
 function findDevice(roomName) {
   return devicesByName.get((roomName || '').toLowerCase()) || null;
+}
+
+// The art proxy only ever fetches from these (its SSRF allow-list), so
+// it follows address changes healed by healDeviceAddressIfChanged.
+function getDeviceHosts() {
+  return [...devicesByName.values()].map((d) => d.host);
+}
+
+// Every art URL the Sources screens will show without further browsing:
+// favorites, playlists, and each playlist's tracks. The playlist track
+// lists are already in containerItemsCache from the startup warm-up
+// (fetchPlaylistsFresh peeks every playlist), so this costs no extra
+// speaker browsing when called right after it.
+let startupWarmup = Promise.resolve();
+async function getWarmArtUrls() {
+  if (usingMock) return [];
+  await startupWarmup;
+  const roomName = displayNameByKey.values().next().value;
+  const urls = [];
+  const favorites = await getFavorites(roomName).catch(() => []);
+  favorites.forEach((f) => urls.push(f.albumArtUrl));
+  const playlists = await getPlaylists(roomName).catch(() => []);
+  for (const pl of playlists) {
+    urls.push(pl.albumArtUrl);
+    const tracks = await getCachedContainerItems(roomName, pl.id).catch(() => []);
+    tracks.forEach((t) => urls.push(t.albumArtUrl));
+  }
+  return urls.filter(Boolean);
 }
 
 // Real-time updates, in addition to (not instead of) the polling below --
@@ -1345,7 +1378,7 @@ async function getNowPlaying(roomName) {
       album: track.album || '',
       // Preference: the song's own cover, then the station/favorite's
       // artwork; the client falls back to the service icon after that.
-      albumArtUrl: track.albumArtURL || stationArtUrl || null,
+      albumArtUrl: artProxy.repairSpeakerUrl(track.albumArtURL || stationArtUrl) || null,
       sourceService,
       playing: state === 'playing',
       position: track.position || 0,
@@ -2134,7 +2167,7 @@ function mapDidlNode(device, node, browsable, serviceMap) {
     title: parsedItem.title || node['dc:title'] || 'Untitled',
     artist: parsedItem.artist || null,
     album: parsedItem.album || null,
-    albumArtUrl: parsedItem.albumArtURI || null,
+    albumArtUrl: artProxy.repairSpeakerUrl(parsedItem.albumArtURI) || null,
     browsable,
     uri: browsable ? null : parsedItem.uri || resUri || null,
     // Sonos embeds this item's own exact playback metadata (service auth
@@ -3057,6 +3090,8 @@ function isMock() {
 
 module.exports = {
   init,
+  getDeviceHosts,
+  getWarmArtUrls,
   getRooms,
   getRoomsTargeted,
   getGroupMemberNames,
