@@ -351,6 +351,7 @@ function attachDeviceEventListeners(name, device) {
   device.on('PlayState', (state) => {
     try {
       const playing = state === 'playing';
+      invalidateNowPlaying(name);
       const existing = lastRoomsByName.get(name) || { name, volume: 0, playing: false, muted: false, reachable: true, coordinator: name };
       lastRoomsByName.set(name, { ...existing, playing });
       notifyLiveUpdate();
@@ -390,6 +391,7 @@ function attachDeviceEventListeners(name, device) {
   // cheap, safe, and avoids duplicating that logic a second time here.
   device.on('AVTransport', () => {
     try {
+      invalidateNowPlaying(name);
       if (nowPlayingChangedCallback) nowPlayingChangedCallback(name);
     } catch (err) {
       debugLog.warn('sonos', `Error handling AVTransport event for ${name}: ${err.message}`);
@@ -1361,6 +1363,47 @@ async function getNowPlaying(roomName) {
     debugLog.warn('sonos', `getNowPlaying(${roomName}) failed: ${err.message}`);
     return null;
   }
+}
+
+// One getNowPlaying() is 5-8 SOAP calls to the speaker, and a single
+// play used to trigger 6-9 of them per open screen (socket signals, the
+// tap handler's own refresh, poll broadcasts) that piled up behind the
+// speaker's TRANSITIONING state -- 2-3 s each on the wall panel. Callers
+// asking for the same room now share one in-flight lookup, and a finished
+// result is reused for NOW_PLAYING_CACHE_MS. invalidateNowPlaying() drops
+// the entry whenever something changes (actions, AVTransport/PlayState
+// events), so a fresh question is never answered with pre-change state;
+// anyone already waiting on the old lookup still gets it, which is fine
+// -- it was asked before the change.
+const NOW_PLAYING_CACHE_MS = 500;
+const nowPlayingShared = new Map(); // lowercased room -> { promise, pending, at }
+
+function invalidateNowPlaying(roomName) {
+  if (roomName == null) nowPlayingShared.clear();
+  else nowPlayingShared.delete(String(roomName).toLowerCase());
+}
+
+function getNowPlayingShared(roomName) {
+  const key = String(roomName || '').toLowerCase();
+  const cached = nowPlayingShared.get(key);
+  if (cached && (cached.pending || Date.now() - cached.at < NOW_PLAYING_CACHE_MS)) return cached.promise;
+  // asOf = when the lookup STARTED, so clients can drop a result that is
+  // older than one they've already shown (a push and a fetch can cross).
+  const entry = { pending: true, at: Date.now(), promise: null };
+  const startedAt = entry.at;
+  entry.promise = getNowPlaying(roomName).then(
+    (track) => {
+      entry.pending = false;
+      entry.at = Date.now();
+      return track ? { ...track, asOf: startedAt } : track;
+    },
+    (err) => {
+      if (nowPlayingShared.get(key) === entry) nowPlayingShared.delete(key);
+      throw err;
+    }
+  );
+  nowPlayingShared.set(key, entry);
+  return entry.promise;
 }
 
 async function play(roomName) {
@@ -3024,6 +3067,8 @@ module.exports = {
   onNowPlayingChanged,
   onGroupVolumeChanged,
   getNowPlaying,
+  getNowPlayingShared,
+  invalidateNowPlaying,
   play,
   pause,
   next,

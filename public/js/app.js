@@ -111,7 +111,7 @@
       } else if (msg.type === 'sonos:rooms') {
         SonosView.refreshFromSocket(msg.rooms);
       } else if (msg.type === 'sonos:nowplaying-changed') {
-        SonosView.handleNowPlayingChanged(msg.room);
+        SonosView.handleNowPlayingChanged(msg.room, msg.track);
         if (window.QueuePanel) window.QueuePanel.handleNowPlayingChanged(msg.room);
       } else if (msg.type === 'sonos:sources-inuse') {
         SonosView.handleSourcesInUse(msg.items);

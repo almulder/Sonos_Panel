@@ -197,13 +197,30 @@ app.get('/api/config', (req, res) => {
 
 // ---------------- Sonos routes ----------------
 
+// Now-playing lookups are shared and briefly cached (see
+// getNowPlayingShared in sonos.js), so anything that can change playback
+// has to drop that cache -- otherwise the refresh a screen does right
+// after e.g. toggling shuffle could be answered with the pre-toggle
+// state. Not every action route triggers a fast poll (shuffle, repeat,
+// crossfade, sleep timer don't), hence one catch-all here instead of a
+// line in each route. Every room is dropped, not just the one in the URL:
+// grouping changes what the members show, and Local Library plays live
+// under /api/local. Dropped both before the action runs and again once
+// it has answered, so a lookup that started mid-action isn't reused.
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET') return next();
+  sonos.invalidateNowPlaying(null);
+  res.on('finish', () => sonos.invalidateNowPlaying(null));
+  next();
+});
+
 app.get('/api/sonos/rooms', asyncHandler(async (req, res) => {
   const rooms = await sonos.getRooms();
   res.json({ rooms, mock: sonos.isMock() });
 }));
 
 app.get('/api/sonos/nowplaying/:room', asyncHandler(async (req, res) => {
-  const track = await sonos.getNowPlaying(req.params.room);
+  const track = await sonos.getNowPlayingShared(req.params.room);
   res.json(track);
 }));
 
@@ -825,6 +842,24 @@ async function main() {
     });
   }
 
+  // The fast-poll burst re-sends the room list every ~150 ms for 5 s
+  // after any tap, almost always unchanged -- and each copy woke every
+  // screen up to parse it (the slow wall panel included). Identical lists
+  // are now skipped, except one every ROOMS_RESEND_MS so screens still get
+  // a regular heartbeat (they use it as a safety-net now-playing resync).
+  const ROOMS_RESEND_MS = 10000;
+  let lastRoomsMsg = null;
+  let lastRoomsSentAt = 0;
+  function broadcastRooms(rooms) {
+    const msg = JSON.stringify({ type: 'sonos:rooms', rooms });
+    if (msg === lastRoomsMsg && Date.now() - lastRoomsSentAt < ROOMS_RESEND_MS) return;
+    lastRoomsMsg = msg;
+    lastRoomsSentAt = Date.now();
+    wss.clients.forEach((client) => {
+      if (client.readyState === client.OPEN) client.send(msg);
+    });
+  }
+
   // Scanner progress -> clients. Sent per batch commit plus on scan
   // start/finish, so a library tab can show live scan progress.
   function broadcastScan(progress) {
@@ -845,18 +880,35 @@ async function main() {
   // events) call this the instant something changes, independent of
   // the poll loop below.
   sonos.onLiveUpdate((rooms) => {
-    broadcast({ type: 'sonos:rooms', rooms });
+    broadcastRooms(rooms);
     scheduleInUsePush();
   });
 
-  // Two lightweight signals -- these don't carry the changed data
-  // themselves, they just tell the client "go re-fetch this if it's
-  // relevant to what you're currently showing" (see the client-side
-  // handling in app.js/sonosView.js for why -- reusing the client's
-  // existing refresh logic rather than duplicating it here).
+  // Now-playing changes are pushed WITH the new now-playing payload, so
+  // screens render it straight away instead of every one of them asking
+  // the speaker again (that fan-out was 6-9 lookups per play, per
+  // screen). A play/skip fires a run of AVTransport events within a
+  // second (TRANSITIONING -> PLAYING, new metadata), so they're debounced
+  // per room and looked up once, through the same shared lookup the
+  // /nowplaying route uses. If the lookup fails the bare signal still goes
+  // out and screens fall back to fetching, exactly as before. (The group
+  // volume signal below stays a bare "go re-check".)
+  const NOWPLAYING_PUSH_DEBOUNCE_MS = 250;
+  const nowPlayingPushTimers = new Map();
   sonos.onNowPlayingChanged((room) => {
-    broadcast({ type: 'sonos:nowplaying-changed', room });
     scheduleInUsePush();
+    clearTimeout(nowPlayingPushTimers.get(room));
+    nowPlayingPushTimers.set(room, setTimeout(async () => {
+      nowPlayingPushTimers.delete(room);
+      if (wss.clients.size === 0) return; // nobody to tell; skip the speaker round trip
+      let track;
+      try {
+        track = await sonos.getNowPlayingShared(room);
+      } catch (err) {
+        track = undefined;
+      }
+      broadcast(track ? { type: 'sonos:nowplaying-changed', room, track } : { type: 'sonos:nowplaying-changed', room });
+    }, NOWPLAYING_PUSH_DEBOUNCE_MS));
   });
   sonos.onGroupVolumeChanged(() => {
     broadcast({ type: 'sonos:groupvolume-changed' });
@@ -866,7 +918,7 @@ async function main() {
   // and .../ungroup) push the current cached room list immediately,
   // rather than waiting for the next scheduled poll tick to pick it up.
   broadcastNow = () => {
-    broadcast({ type: 'sonos:rooms', rooms: sonos.getLastKnownRooms() });
+    broadcastRooms(sonos.getLastKnownRooms());
   };
 
   function scheduleSonosPoll() {
@@ -886,7 +938,7 @@ async function main() {
         const rooms = useTargeted
           ? await sonos.getRoomsTargeted([...sonosFastPollTargets])
           : await sonos.getRooms();
-        broadcast({ type: 'sonos:rooms', rooms });
+        broadcastRooms(rooms);
         scheduleInUsePush();
       } catch (err) {
         debugLog.warn('server', `poll loop (sonos) error: ${err.message}`);
@@ -910,7 +962,7 @@ async function main() {
   setInterval(async () => {
     try {
       const rooms = await sonos.getRooms();
-      broadcast({ type: 'sonos:rooms', rooms });
+      broadcastRooms(rooms);
     } catch (err) {
       debugLog.warn('server', `safety-net full poll error: ${err.message}`);
     }
