@@ -155,6 +155,28 @@ PoE panel whose CPU is ~13x slower than a laptop):
 
 ## Bug fixes
 
+### Updated: v0.17.0 - Oct 25, 2026
+
+- **Some favorite and playlist artwork never loaded**: speaker art for
+  a few items (some SoundCloud favorites, for example) came back as
+  `http://<speaker>:1400images/...`, missing a slash, so no browser
+  could load it. Fixed
+- **Live updates could silently stop for a room**: after a speaker
+  reboot or one failed renewal, the Sonos library could stop renewing
+  that speaker's change notifications for good, leaving its volume and
+  play state stale until the container was restarted. The panel now
+  checks the subscriptions every 10 minutes (and whenever a room comes
+  back online) and re-subscribes
+- **Room list polling no longer trusts a frozen cache**: the regular
+  15 s check now reads volume, mute and play state from the speakers
+  themselves, so a room whose notifications died still shows the truth
+- The quick re-check after a tap only ran if the tap happened to land
+  within 5 s of a scheduled poll; it now always runs (once after 1 s,
+  once 3 s after the last tap)
+- A tap that Sonos refuses while a stream is still starting ("transition
+  not available") no longer shows a failure when the music is in fact
+  starting
+
 ### Updated: v0.16.2 - Oct 09, 2026
 
 - **A failed play no longer throws you back to the home screen.** When
