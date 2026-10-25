@@ -123,6 +123,36 @@ not a panel limitation.
   nobody loses their place. It relies on the version number in
   `package.json`, so bump it with each release
 
+### Updated: v0.17.0 - Oct 25, 2026
+
+Speed release, aimed at slow wall panels (measured on an Android 14
+PoE panel whose CPU is ~13x slower than a laptop):
+
+- **Play/pause responds instantly**: the button flips on tap instead of
+  waiting 3-5 s for the speaker (streams like Pandora sit in a
+  "transitioning" state for several seconds after a play). If the
+  speaker refuses, the button flips back with the usual message. Next
+  shows the upcoming song right away for playlists and queues, and
+  switching rooms paints immediately from what the panel last saw
+- **Far fewer requests per tap**: the server now pushes the new
+  now-playing info (and group volume) over the live connection instead
+  of every screen asking the speakers again -- one play used to cause
+  6-9 now-playing lookups per screen, now it's about one. Duplicate
+  room-list updates are no longer sent, and the 150 ms polling burst
+  after every tap is replaced by two confirming checks
+- **Album art loads at once**: art stored on the speakers is fetched
+  once by the server, cached (memory plus up to 300 MB in the appdata
+  folder, `artcache-remote/`) and shared by every screen, instead of
+  each browser asking one speaker for dozens of images at the same time
+  (which took 5+ s). Only images from your own speakers are proxied
+- **Quicker skips and source taps**: next/previous answer about 0.7 s
+  sooner, and starting a favorite skips waits that were only needed
+  when something was already playing
+- **Self-healing live updates**: if a speaker stops sending its change
+  notifications (a known gap in the Sonos library after a reboot or a
+  failed renewal), the server notices and re-subscribes instead of
+  quietly going stale until a restart
+
 ## Bug fixes
 
 ### Updated: v0.16.2 - Oct 09, 2026
