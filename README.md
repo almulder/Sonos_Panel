@@ -175,6 +175,13 @@ PoE panel whose CPU is ~13x slower than a laptop):
   container update), and stops promptly instead of making Docker wait
   10 s and kill it. Leftover subscriptions measurably delayed a
   speaker's live updates to every screen until they expired (30 min)
+- **A playing room no longer disappears from the room list after
+  switching sources**: a speaker busy loading a new station (Pandora
+  after a Plex track, for example) can take a few seconds to answer,
+  and one slow answer used to mark the room disconnected and hide it
+  until the next check. A room is now only treated as disconnected after
+  two failed checks in a row, and never while it's still sending live
+  updates
 - Speakers are now told to drop subscriptions the server doesn't know
   (the Sonos library meant to, but a typo made it answer "OK"), so
   leftovers from a crash or a killed process clear themselves
