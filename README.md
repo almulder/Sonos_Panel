@@ -153,7 +153,31 @@ PoE panel whose CPU is ~13x slower than a laptop):
   failed renewal), the server notices and re-subscribes instead of
   quietly going stale until a restart
 
+### Updated: v0.18.0 - Oct 26, 2026
+
+- **Now playing comes straight from the speakers' own announcements**:
+  each speaker already broadcasts its play mode, crossfade, station or
+  queue, sleep timer and next song whenever they change, and the server
+  now keeps those instead of asking the speaker for each of them every
+  time a screen refreshes. A now-playing update used to cost 5-7
+  requests to the speaker; it's now 1-3 (just the song and its exact
+  position), measured across all 16 rooms with identical results.
+  Anything that looks out of date (a missed announcement, a speaker
+  that was rebooted) falls back to asking the speaker the old way, and
+  a full check runs every 90 seconds anyway
+
 ## Bug fixes
+
+### Updated: v0.18.0 - Oct 26, 2026
+
+- **Restarts no longer leave stale event subscriptions behind**: the
+  server now unsubscribes from every speaker when it's stopped (every
+  container update), and stops promptly instead of making Docker wait
+  10 s and kill it. Leftover subscriptions measurably delayed a
+  speaker's live updates to every screen until they expired (30 min)
+- Speakers are now told to drop subscriptions the server doesn't know
+  (the Sonos library meant to, but a typo made it answer "OK"), so
+  leftovers from a crash or a killed process clear themselves
 
 ### Updated: v0.17.0 - Oct 25, 2026
 
