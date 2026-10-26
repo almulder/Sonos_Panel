@@ -1057,29 +1057,30 @@ function sanitizeRoomsForClient(rooms) {
 // back from unreachable, or live values contradicting the library's
 // event cache while events have been quiet, both trigger a resubscribe.
 const lastReachable = new WeakMap(); // device -> reachable at the previous poll
-const REACHABILITY_STRIKES = 2;
-const ALIVE_IF_EVENT_WITHIN_MS = 20000;
-const probeFailures = new WeakMap(); // device -> consecutive failed reachability probes
+// One slow answer isn't "unplugged": a speaker loading a new station
+// (Pandora after a Plex track, hardware-observed) can take >3 s to answer
+// anything -- three probes in a row timed out -- and the confirming polls
+// land right in that window. The room then vanished from the list
+// (unreachable rooms are filtered out) while still playing. So the rule is
+// time, not a count (overlapping polls burn through any count in seconds):
+// a room goes unreachable only when it has neither answered a probe nor
+// sent an event for UNREACHABLE_AFTER_SILENT_MS. A speaker that has never
+// answered at all (dead at startup) is unreachable straight away. Keyed by
+// room name so a speaker that moved IP (new device object) keeps its
+// history.
+const UNREACHABLE_AFTER_SILENT_MS = 45 * 1000;
+const lastProbeOkAt = new Map(); // room name -> ms
 async function readDeviceLive(device, name) {
   const previous = lastRoomsByName.get(name) || { volume: 0, playing: false, muted: false };
   let volume;
   try {
     volume = await withTimeout(device.renderingControlService().GetVolume(), DEVICE_CALL_TIMEOUT_MS, `reachability probe(${name})`);
-    probeFailures.delete(device);
+    lastProbeOkAt.set(name, Date.now());
   } catch (err) {
-    // One slow answer isn't "unplugged": a speaker loading a new station
-    // (Pandora after a Plex track, hardware-observed) can take >3 s to
-    // answer anything, and the confirming polls land right in that window
-    // -- the room then vanished from the list (unreachable rooms are
-    // filtered out) until a later poll. So a room only goes unreachable
-    // after REACHABILITY_STRIKES failed probes in a row, and never while
-    // it has sent an event recently, which proves it's alive.
-    const strikes = (probeFailures.get(device) || 0) + 1;
-    probeFailures.set(device, strikes);
-    const heardRecently = Date.now() - (lastEventAt.get(device) || 0) < ALIVE_IF_EVENT_WITHIN_MS;
-    const stillCounting = strikes < REACHABILITY_STRIKES || heardRecently;
-    debugLog.warn('sonos', `reachability probe failed for ${name} (${strikes} in a row${stillCounting ? ', not marking it disconnected yet' : ''}): ${err.message}`);
-    if (stillCounting && previous.reachable !== false) {
+    const lastSignOfLife = Math.max(lastProbeOkAt.get(name) || 0, lastEventAt.get(device) || 0);
+    const graceLeft = lastSignOfLife > 0 && Date.now() - lastSignOfLife < UNREACHABLE_AFTER_SILENT_MS;
+    debugLog.warn('sonos', `reachability probe failed for ${name}${graceLeft ? ` (alive ${Math.round((Date.now() - lastSignOfLife) / 1000)} s ago, not marking it disconnected yet)` : ''}: ${err.message}`);
+    if (graceLeft && previous.reachable !== false) {
       return { volume: previous.volume, playing: previous.playing, muted: previous.muted, reachable: true };
     }
     lastReachable.set(device, false);
