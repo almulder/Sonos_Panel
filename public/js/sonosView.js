@@ -327,6 +327,22 @@ const SonosView = (() => {
         members.forEach((member) => roomListEl.appendChild(buildMemberRow(member)));
       }
     });
+
+    // The server leaves out rooms it can't reach. If that's the room this
+    // screen is controlling, keep a greyed row for it instead of silently
+    // dropping the highlight -- the now-playing card above still shows it.
+    if (focusedRoom && !rooms.some((r) => r.name === focusedRoom)) {
+      const li = document.createElement('li');
+      li.className = 'roomrow is-focused is-disconnected';
+      const main = document.createElement('div');
+      main.className = 'roomrow__main';
+      const name = document.createElement('span');
+      name.className = 'roomrow__name';
+      name.textContent = `${focusedRoom} (reconnecting…)`;
+      main.appendChild(name);
+      li.appendChild(main);
+      roomListEl.appendChild(li);
+    }
   }
 
   function buildVolumeControl(room) {
