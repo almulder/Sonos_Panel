@@ -439,6 +439,13 @@ function eventTransportState(device) {
   return st;
 }
 
+// The next lookup that would use the event state asks the full old way
+// first and compares (the spot check in getNowPlaying).
+function requireEventStateRecheck(device) {
+  const st = avStateByDevice.get(device);
+  if (st) st.verifiedAt = 0;
+}
+
 function markEventTransportStale(device, name, why) {
   const st = avStateByDevice.get(device);
   if (!st || st.stale) return;
@@ -705,9 +712,25 @@ const pendingSubscribeTo = new WeakMap(); // device -> in-flight Listener.subscr
 // unknown SID -- but only once the same SID has been unknown for a
 // while, because a brand-new subscription's first NOTIFY can arrive a
 // moment before the library has recorded its SID, and rejecting that
-// would cancel a healthy subscription.
-const UNKNOWN_SID_GRACE_MS = 10000;
+// would cancel a healthy subscription. For the same reason nothing is
+// rejected while any device's subscribe is still under way: the library
+// records a device's SIDs only after ALL its SUBSCRIBEs have answered.
+const UNKNOWN_SID_GRACE_MS = 60 * 1000;
+// Longer than a subscription's 30-min life, so an orphan that notifies
+// only rarely (idle Queue/Alarm events) still gets its second strike.
+const UNKNOWN_SID_FORGET_MS = 35 * 60 * 1000;
+const UNKNOWN_SID_MAX = 2000;
 const unknownSidFirstSeen = new Map(); // sid -> ms
+let subscribeCallsInFlight = 0; // ensureSubscribed's own Listener.subscribeTo calls
+function anySubscribeUnderWay(subs) {
+  if (subscribeCallsInFlight > 0) return true;
+  // The library's own first subscribe per device (started by device.on):
+  // flagged subscribed but not yet in its list.
+  for (const device of devicesByName.values()) {
+    if (device._isSubscribed && !subs.some((s) => s.device === device)) return true;
+  }
+  return false;
+}
 if (Listener && typeof Listener._handleMessage === 'function') {
   const libraryHandleMessage = Listener._handleMessage.bind(Listener);
   Listener._handleMessage = function (req, resp, body) {
@@ -716,10 +739,12 @@ if (Listener && typeof Listener._handleMessage === 'function') {
     const subs = Array.isArray(this._deviceSubscriptions) ? this._deviceSubscriptions : [];
     if (isNotify && sid && !subs.some((s) => s.hasSubscription(sid))) {
       const now = Date.now();
-      for (const [k, t] of unknownSidFirstSeen) if (now - t > 10 * UNKNOWN_SID_GRACE_MS) unknownSidFirstSeen.delete(k);
+      for (const [k, t] of unknownSidFirstSeen) if (now - t > UNKNOWN_SID_FORGET_MS) unknownSidFirstSeen.delete(k);
       const first = unknownSidFirstSeen.get(sid);
-      if (first === undefined) unknownSidFirstSeen.set(sid, now);
-      else if (now - first > UNKNOWN_SID_GRACE_MS) {
+      if (first === undefined) {
+        if (unknownSidFirstSeen.size >= UNKNOWN_SID_MAX) unknownSidFirstSeen.delete(unknownSidFirstSeen.keys().next().value);
+        unknownSidFirstSeen.set(sid, now);
+      } else if (now - first > UNKNOWN_SID_GRACE_MS && !anySubscribeUnderWay(subs)) {
         unknownSidFirstSeen.delete(sid);
         resp.statusCode = 412; // Precondition Failed: the UPnP way to say "no such subscription"
         resp.end();
@@ -733,14 +758,28 @@ if (Listener && typeof Listener._handleMessage === 'function') {
 // Called on SIGTERM/SIGINT (index.js): unsubscribe from every speaker so a
 // restart -- every container update -- doesn't leave a full set of
 // orphaned subscriptions behind for the next 30 minutes.
+//
+// Every SID is cancelled on its own, all in parallel, and all of them are
+// waited for (up to the cap): the library's stopListener() gives up at
+// the first speaker that refuses (a rebooted one answers 412 at once),
+// and exiting then would cut the remaining UNSUBSCRIBEs off mid-flight.
+let stopping = false; // no new subscription work once shutdown has begun
+const SHUTDOWN_UNSUBSCRIBE_MS = 4000;
 async function shutdown() {
+  stopping = true;
   if (usingMock || !Listener || typeof Listener.isListening !== 'function' || !Listener.isListening()) return;
-  try {
-    await withTimeout(Listener.stopListener(), 4000, 'unsubscribe from all speakers');
-    debugLog.info('sonos', 'Unsubscribed from speaker events');
-  } catch (err) {
-    debugLog.warn('sonos', `Unsubscribing on shutdown failed: ${err.message}`);
+  const subs = Array.isArray(Listener._deviceSubscriptions) ? Listener._deviceSubscriptions : [];
+  const cancels = [];
+  for (const sub of subs) {
+    for (const sid of Object.keys(sub.subscriptions || {})) {
+      cancels.push(withTimeout(sub.cancelSubscription(sid), SHUTDOWN_UNSUBSCRIBE_MS, `unsubscribe ${sid}`));
+    }
   }
+  const results = await Promise.allSettled(cancels);
+  const failed = results.filter((r) => r.status === 'rejected').length;
+  try { if (Listener._eventServer) Listener._eventServer.close(); } catch (err) { /* already closed */ }
+  Listener._listening = false;
+  debugLog.info('sonos', `Unsubscribed from speaker events (${results.length - failed} of ${results.length}; the rest were already gone or unreachable)`);
 }
 const RENEW_SETTLE_MS = 15000;
 
@@ -766,7 +805,7 @@ async function dropDuplicateSubscriptions(sub, name) {
 }
 
 async function ensureSubscribed(device, name, reason) {
-  if (usingMock || !device || subscriptionCheckInFlight.has(device)) return;
+  if (usingMock || stopping || !device || subscriptionCheckInFlight.has(device)) return;
   const last = subscriptionCheckAt.get(device) || 0;
   if (reason !== 'periodic' && Date.now() - last < SUBSCRIPTION_RETRY_COOLDOWN_MS) return;
   subscriptionCheckInFlight.add(device);
@@ -784,10 +823,14 @@ async function ensureSubscribed(device, name, reason) {
       if (pendingSubscribeTo.has(device)) return;
       debugLog.info('sonos', `Subscribing ${name} to events (${reason}; no live subscription found)`);
       device._isSubscribed = false;
-      // Whatever was heard before is from a subscription that's gone; the
-      // fresh one's first NOTIFY carries the full state again.
-      avStateByDevice.delete(device);
-      const p = Listener.subscribeTo(device).finally(() => pendingSubscribeTo.delete(device));
+      // Whatever was heard before is from a subscription that's gone. It's
+      // kept (the fresh subscription's first NOTIFY is often dropped by the
+      // library as "unknown SID", so a wipe could leave lookups on the slow
+      // path for hours on a steady stream) but must pass a full spot check
+      // before it's used again.
+      requireEventStateRecheck(device);
+      subscribeCallsInFlight++;
+      const p = Listener.subscribeTo(device).finally(() => { pendingSubscribeTo.delete(device); subscribeCallsInFlight--; });
       pendingSubscribeTo.set(device, p);
       await withTimeout(p, DEVICE_CALL_TIMEOUT_MS * 2, `subscribeTo(${name})`);
       return;
@@ -814,9 +857,8 @@ async function ensureSubscribed(device, name, reason) {
     const expected = sub === subs[0] ? GLOBAL_EVENT_ENDPOINTS.concat(DEVICE_EVENT_ENDPOINTS) : DEVICE_EVENT_ENDPOINTS;
     const have = new Set(Object.keys(sub.subscriptions).map((sid) => sub.subscriptions[sid].endpoint));
     const missing = expected.filter((ep) => !have.has(ep));
-    // Same reasoning when the transport subscription itself is re-added
-    // (done before the SUBSCRIBE so its first NOTIFY can't be wiped).
-    if (missing.includes('/MediaRenderer/AVTransport/Event')) avStateByDevice.delete(device);
+    // Same reasoning when the transport subscription itself is re-added.
+    if (missing.includes('/MediaRenderer/AVTransport/Event')) requireEventStateRecheck(device);
     for (const ep of missing) {
       await withTimeout(sub.addSubscription(ep), DEVICE_CALL_TIMEOUT_MS, `subscribe ${ep} (${name})`);
     }
@@ -1683,10 +1725,18 @@ async function getNowPlaying(roomName) {
     // neither of the other checks would catch a shuffle or crossfade
     // toggled from the phone app.
     let verifyAgainst = null;
+    let liveMediaForCheck = null;
     if (ev && Date.now() - (ev.verifiedAt || 0) > EVENT_STATE_VERIFY_MS) {
-      verifyAgainst = { st: ev, seq: ev.seq, playMode: ev.fields.CurrentPlayMode, crossfade: ev.fields.CurrentCrossfadeMode === '1' };
+      verifyAgainst = { st: ev, seq: ev.seq, playMode: ev.fields.CurrentPlayMode, crossfade: ev.fields.CurrentCrossfadeMode === '1', transportUri: ev.fields.AVTransportURI };
+      // The station/queue the room is on too (favorite label, queue check).
+      liveMediaForCheck = getMediaInfoShared(roomName, { fromEvents: false }).catch(() => null);
       ev = null;
     }
+    // Mismatches are only evidence of a dead subscription once events have
+    // been quiet a moment -- the event for the change just read may still
+    // be on its way (same rule as readDeviceLive).
+    const eventsQuiet = () => Date.now() - (lastEventAt.get(device) || 0) > EVENT_QUIET_FOR_MISMATCH_MS;
+    let readFailed = false; // a failed read below falls back to a default, which proves nothing
     if (ev) {
       const seqBefore = ev.seq;
       const evTrack = await device.currentTrack();
@@ -1701,7 +1751,7 @@ async function getNowPlaying(roomName) {
         // catch up). Set them aside until the next one, and have the
         // watchdog check the subscription (its cooldown limits this).
         markEventTransportStale(device, roomName, 'track URI differs from the speaker');
-        ensureSubscribed(device, roomName, 'track URI differs from event state');
+        if (eventsQuiet()) ensureSubscribed(device, roomName, 'track URI differs from event state');
         ev = null;
       } else {
         inputs = [
@@ -1718,10 +1768,12 @@ async function getNowPlaying(roomName) {
       device.getCurrentState(),
       device.getPlayMode().catch((err) => {
         debugLog.warn('sonos', `getPlayMode() failed for ${roomName}: ${err.message}`);
+        readFailed = true;
         return 'NORMAL';
       }),
       device.avTransportService().GetCrossfadeMode().then((r) => Boolean(Number(r.CrossfadeMode))).catch((err) => {
         debugLog.warn('sonos', `GetCrossfadeMode() failed for ${roomName}: ${err.message}`);
+        readFailed = true;
         return false;
       }),
       device.avTransportService().GetRemainingSleepTimerDuration().then((r) => parseHmsToSeconds(r.RemainingSleepTimerDuration)).catch((err) => {
@@ -1729,12 +1781,18 @@ async function getNowPlaying(roomName) {
         return 0;
       })
     ]);
-    if (verifyAgainst && verifyAgainst.st.seq === verifyAgainst.seq) {
-      if (verifyAgainst.playMode === playMode && verifyAgainst.crossfade === crossfadeOn) {
-        verifyAgainst.st.verifiedAt = Date.now();
-      } else {
-        markEventTransportStale(device, roomName, 'spot check: play mode/crossfade differ from the speaker');
-        ensureSubscribed(device, roomName, 'event state failed spot check');
+    if (verifyAgainst) {
+      const liveMedia = await liveMediaForCheck;
+      // Skipped (and retried next lookup) when a read failed or an event
+      // arrived meanwhile -- neither says anything about the event state.
+      if (!readFailed && liveMedia && verifyAgainst.st.seq === verifyAgainst.seq) {
+        if (verifyAgainst.playMode === playMode && verifyAgainst.crossfade === crossfadeOn
+          && verifyAgainst.transportUri === liveMedia.CurrentURI) {
+          verifyAgainst.st.verifiedAt = Date.now();
+        } else {
+          markEventTransportStale(device, roomName, 'spot check: play mode/crossfade/transport differ from the speaker');
+          if (eventsQuiet()) ensureSubscribed(device, roomName, 'event state failed spot check');
+        }
       }
     }
     const { shuffle: shuffleOn, repeat: repeatMode } = decomposePlayMode(playMode);
