@@ -379,6 +379,82 @@ async function getWarmArtUrls() {
 // self-heal for both; polling stays in place as a safety net too (see
 // POLL_INTERVAL_MS in index.js) and reads live values (readDeviceLive),
 // so a dead subscription can't freeze the room list in the meantime.
+// ---- Event-fed transport state ----
+//
+// A speaker's AVTransport NOTIFY carries nearly everything a now-playing
+// lookup used to ask for with separate SOAP calls: play mode, crossfade,
+// the transport URI + its metadata (favorite matching, queue check),
+// the sleep-timer generation and the NEXT track (Up Next). Captured live
+// on a Connect:Amp: the first NOTIFY after subscribing has every
+// variable; later ones only what changed -- hence the merge. This keeps
+// the latest value of each per device so getNowPlaying can skip 4-6
+// round trips per lookup.
+//
+// Trusted only while it can be: (a) the full first NOTIFY has arrived,
+// (b) nothing has contradicted it since (getNowPlaying cross-checks the
+// track URI on every lookup; the 15 s live poll cross-checks the play
+// state -- either marks it stale until the next event), and (c) the
+// device drives its own transport (a grouped member mirrors
+// x-rincon:<coordinator> and has no play mode of its own). Otherwise
+// getNowPlaying falls back to asking the speaker, exactly as before.
+const AV_EVENT_FIELDS = ['TransportState', 'CurrentPlayMode', 'CurrentCrossfadeMode', 'CurrentTrack', 'CurrentTrackURI',
+  'AVTransportURI', 'AVTransportURIMetaData', 'r:NextTrackURI', 'r:SleepTimerGeneration'];
+const avStateByDevice = new WeakMap(); // device -> { fields, next, stale }
+
+function mergeAvTransportEvent(device, data) {
+  if (!data || typeof data !== 'object') return;
+  const st = avStateByDevice.get(device) || { fields: {}, next: undefined, stale: false };
+  for (const key of AV_EVENT_FIELDS) {
+    if (typeof data[key] === 'string') st.fields[key] = data[key];
+  }
+  // Present-but-empty means "no next track" (radio, end of queue); the
+  // library only adds the parsed form when there is metadata.
+  if (typeof data['r:NextTrackMetaData'] === 'string') st.next = data['r:NextTrackMetaDataParsed'] || null;
+  st.stale = false;
+  avStateByDevice.set(device, st);
+}
+
+function eventTransportState(device) {
+  const st = device && avStateByDevice.get(device);
+  if (!st || st.stale) return null;
+  const f = st.fields;
+  if (f.TransportState === undefined || f.CurrentPlayMode === undefined || f.AVTransportURI === undefined) return null;
+  if (f.AVTransportURI.startsWith('x-rincon:')) return null;
+  return st;
+}
+
+function markEventTransportStale(device, name, why) {
+  const st = avStateByDevice.get(device);
+  if (!st || st.stale) return;
+  st.stale = true;
+  debugLog.info('sonos', `Event transport state for ${name} set aside until the next event (${why})`);
+}
+
+// Remaining sleep time, per device: asked once per timer (each set or
+// cancel bumps SleepTimerGeneration), then counted down locally.
+// Generation "0" = no timer has been set since the speaker started.
+const sleepTimerByDevice = new WeakMap(); // device -> { gen, remaining, at }
+async function sleepTimerFromEvents(device, ev, roomName) {
+  const gen = ev.fields['r:SleepTimerGeneration'];
+  const cached = sleepTimerByDevice.get(device);
+  if (gen !== undefined && cached && cached.gen === gen) {
+    return Math.max(0, Math.round(cached.remaining - (Date.now() - cached.at) / 1000));
+  }
+  if (gen === '0') {
+    sleepTimerByDevice.set(device, { gen, remaining: 0, at: Date.now() });
+    return 0;
+  }
+  try {
+    const r = await device.avTransportService().GetRemainingSleepTimerDuration();
+    const remaining = parseHmsToSeconds(r.RemainingSleepTimerDuration);
+    if (gen !== undefined) sleepTimerByDevice.set(device, { gen, remaining, at: Date.now() });
+    return remaining;
+  } catch (err) {
+    debugLog.warn('sonos', `GetRemainingSleepTimerDuration() failed for ${roomName}: ${err.message}`);
+    return 0;
+  }
+}
+
 function attachDeviceEventListeners(name, device) {
   device.on('PlayState', (state) => {
     try {
@@ -421,8 +497,12 @@ function attachDeviceEventListeners(name, device) {
   // changed for this room" and lets the client re-run its own existing
   // refreshNowPlaying() if that room happens to be the focused one --
   // cheap, safe, and avoids duplicating that logic a second time here.
-  device.on('AVTransport', () => {
+  // The payload's transport fields ARE kept, though (see
+  // mergeAvTransportEvent): getNowPlaying reads play mode, crossfade,
+  // the transport URI and Up Next from them instead of asking again.
+  device.on('AVTransport', (data) => {
     try {
+      mergeAvTransportEvent(device, data);
       invalidateNowPlaying(name);
       if (nowPlayingChangedCallback) nowPlayingChangedCallback(name);
     } catch (err) {
@@ -895,6 +975,11 @@ async function readDeviceLive(device, name) {
     || (device._mute !== undefined && device._mute !== muted)
     || (settled && device._state !== undefined && device._state !== state);
   if (quiet && stale) ensureSubscribed(device, name, 'poll disagreed with event cache');
+  // The same evidence for the event-fed transport state getNowPlaying uses.
+  const ev = eventTransportState(device);
+  if (quiet && settled && ev && Helpers.TranslateState(ev.fields.TransportState) !== state) {
+    markEventTransportStale(device, name, 'live play state differs');
+  }
 
   return { volume, playing: state ? state === 'playing' : previous.playing, muted, reachable: true };
 }
@@ -1512,7 +1597,30 @@ async function getNowPlaying(roomName) {
   const device = findDevice(roomName);
   if (!device) return null;
   try {
-    const [track, state, playMode, crossfadeOn, sleepTimerRemainingSeconds] = await Promise.all([
+    // currentTrack() (GetPositionInfo) is always asked: it's the exact
+    // position (seeks from the phone app send no event) and the check that
+    // the event-fed state below is still current. Everything else comes
+    // from that state when it's trustworthy -- see eventTransportState.
+    let inputs = null;
+    let ev = eventTransportState(device);
+    if (ev) {
+      const evTrack = await device.currentTrack();
+      if ((evTrack.uri || '') !== (ev.fields.CurrentTrackURI || '')) {
+        // Mid track change the speaker can be a beat ahead of its own
+        // event -- or the events died. Either way: ask, this time.
+        markEventTransportStale(device, roomName, 'track URI differs from the speaker');
+        ev = null;
+      } else {
+        inputs = [
+          evTrack,
+          Helpers.TranslateState(ev.fields.TransportState),
+          ev.fields.CurrentPlayMode,
+          ev.fields.CurrentCrossfadeMode === '1',
+          await sleepTimerFromEvents(device, ev, roomName)
+        ];
+      }
+    }
+    const [track, state, playMode, crossfadeOn, sleepTimerRemainingSeconds] = inputs || await Promise.all([
       device.currentTrack(),
       device.getCurrentState(),
       device.getPlayMode().catch((err) => {
@@ -1648,11 +1756,20 @@ async function getNowPlaying(roomName) {
           trackNo = parseInt(pos.Track, 10) || 0;
         }
         if (trackNo > 0) {
-          const { items } = await browseContainerPaged(coordName, 'Q:0', trackNo, 1);
-          if (items && items[0] && items[0].title) {
-            nextTrack = { title: items[0].title, artist: items[0].artist || '' };
+          // The speaker announces its real next track (shuffle included),
+          // so the one-item queue browse is only needed when that came
+          // without metadata.
+          let nextItem = null;
+          if (ev && ev.next && ev.next.title) {
+            nextItem = { title: ev.next.title, artist: ev.next.artist || '', uri: ev.fields['r:NextTrackURI'] || null };
+          } else {
+            const { items } = await browseContainerPaged(coordName, 'Q:0', trackNo, 1);
+            nextItem = items && items[0];
           }
-          if (state === 'playing') guardQueueAhead(roomName, device, track.uri, trackNo, items && items[0]);
+          if (nextItem && nextItem.title) {
+            nextTrack = { title: nextItem.title, artist: nextItem.artist || '' };
+          }
+          if (state === 'playing') guardQueueAhead(roomName, device, track.uri, trackNo, nextItem);
         }
       } catch (err) { /* no next line, no drama */ }
     }
@@ -1911,6 +2028,8 @@ async function setSleepTimer(roomName, minutes) {
   if (!device) return;
   const duration = minutes > 0 ? secondsToHms(minutes * 60) : '';
   await guarded(`setSleepTimer(${roomName})`, () => device.configureSleepTimer(duration));
+  // Don't rely on the generation bump alone; ask afresh next lookup.
+  sleepTimerByDevice.delete(device);
 }
 
 // Bass/treble range -10 to +10 per the UPnP spec, clamped defensively
@@ -2928,6 +3047,11 @@ function getMediaInfoShared(coordName) {
   if (cached && Date.now() - cached.at < MEDIA_INFO_CACHE_MS) return cached.promise;
   const device = findDevice(coordName);
   if (!device) return Promise.reject(new Error(`Room not found: ${coordName}`));
+  // The two fields callers use are in every AVTransport event.
+  const ev = eventTransportState(device);
+  if (ev) {
+    return Promise.resolve({ CurrentURI: ev.fields.AVTransportURI, CurrentURIMetaData: ev.fields.AVTransportURIMetaData || '' });
+  }
   const entry = { at: Date.now(), promise: null };
   entry.promise = withTimeout(device.avTransportService().GetMediaInfo(), DEVICE_CALL_TIMEOUT_MS, `GetMediaInfo(${coordName})`)
     .catch((err) => {
