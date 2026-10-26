@@ -1728,7 +1728,7 @@ async function getNowPlaying(roomName) {
     let shuffleAvailable = isShuffleAvailable(track.uri, roomName);
     if (!shuffleAvailable) {
       try {
-        shuffleAvailable = await isPlayingFromQueue(coordinatorNameFor(roomName));
+        shuffleAvailable = await isPlayingFromQueue(coordinatorNameFor(roomName), { fromEvents: true });
       } catch (err) {
         debugLog.warn('sonos', `getNowPlaying(${roomName}): queue-mode check failed: ${err.message}`);
       }
@@ -2481,7 +2481,7 @@ async function resolveRoomFavorite(roomName) {
   const favorites = favoritesCache.items || [];
   if (favorites.length === 0) return null;
   try {
-    const media = await getMediaInfoShared(coordName);
+    const media = await getMediaInfoShared(coordName, { fromEvents: true });
     const transportUri = media && media.CurrentURI;
     if (!transportUri) return null;
     const direct = favorites.find((f) => f.uri && sameFavoriteUri(f.uri, transportUri));
@@ -3028,10 +3028,10 @@ function attachContentDirectoryListener() {
 // audit); the ReferenceError was swallowed by catch blocks intended
 // for network errors, which silently broke Play Next positioning and
 // shuffle availability. Hence the warn-logging in every caller now.
-async function isPlayingFromQueue(roomName) {
+async function isPlayingFromQueue(roomName, opts) {
   const coordName = coordinatorNameFor(roomName);
   if (!findDevice(coordName)) return false;
-  const info = await getMediaInfoShared(coordName);
+  const info = await getMediaInfoShared(coordName, opts);
   return typeof info.CurrentURI === 'string' && info.CurrentURI.startsWith('x-rincon-queue:');
 }
 
@@ -3041,14 +3041,17 @@ async function isPlayingFromQueue(roomName) {
 // anything changes (see invalidateNowPlaying).
 const MEDIA_INFO_CACHE_MS = 1000;
 const mediaInfoShared = new Map(); // lowercased coordinator -> { promise, at }
-function getMediaInfoShared(coordName) {
+function getMediaInfoShared(coordName, { fromEvents = false } = {}) {
   const key = String(coordName || '').toLowerCase();
   const cached = mediaInfoShared.get(key);
   if (cached && Date.now() - cached.at < MEDIA_INFO_CACHE_MS) return cached.promise;
   const device = findDevice(coordName);
   if (!device) return Promise.reject(new Error(`Room not found: ${coordName}`));
-  // The two fields callers use are in every AVTransport event.
-  const ev = eventTransportState(device);
+  // The two fields callers use are in every AVTransport event. Only for
+  // now-playing display (fromEvents): queue actions (Play Next position,
+  // queue panel) keep asking the speaker, since the event for a change
+  // the panel itself just made can still be a few hundred ms away.
+  const ev = fromEvents ? eventTransportState(device) : null;
   if (ev) {
     return Promise.resolve({ CurrentURI: ev.fields.AVTransportURI, CurrentURIMetaData: ev.fields.AVTransportURIMetaData || '' });
   }
