@@ -397,13 +397,14 @@ async function getWarmArtUrls() {
 // device drives its own transport (a grouped member mirrors
 // x-rincon:<coordinator> and has no play mode of its own). Otherwise
 // getNowPlaying falls back to asking the speaker, exactly as before.
-const AV_EVENT_FIELDS = ['TransportState', 'CurrentPlayMode', 'CurrentCrossfadeMode', 'CurrentTrack', 'CurrentTrackURI',
-  'AVTransportURI', 'AVTransportURIMetaData', 'r:NextTrackURI', 'r:SleepTimerGeneration'];
-const avStateByDevice = new WeakMap(); // device -> { fields, next, stale }
+const AV_EVENT_FIELDS = ['TransportState', 'CurrentPlayMode', 'CurrentCrossfadeMode', 'CurrentTrack', 'NumberOfTracks',
+  'CurrentTrackURI', 'AVTransportURI', 'AVTransportURIMetaData', 'r:NextTrackURI', 'r:SleepTimerGeneration'];
+const avStateByDevice = new WeakMap(); // device -> { fields, next, stale, seq, verifiedAt }
+const EVENT_STATE_VERIFY_MS = 90 * 1000;
 
 function mergeAvTransportEvent(device, data) {
   if (!data || typeof data !== 'object') return;
-  const st = avStateByDevice.get(device) || { fields: {}, next: undefined, stale: false };
+  const st = avStateByDevice.get(device) || { fields: {}, next: undefined, stale: false, seq: 0 };
   for (const key of AV_EVENT_FIELDS) {
     if (typeof data[key] === 'string') st.fields[key] = data[key];
   }
@@ -411,7 +412,21 @@ function mergeAvTransportEvent(device, data) {
   // library only adds the parsed form when there is metadata.
   if (typeof data['r:NextTrackMetaData'] === 'string') st.next = data['r:NextTrackMetaDataParsed'] || null;
   st.stale = false;
+  st.seq++;
   avStateByDevice.set(device, st);
+}
+
+// (d) The library still holds a live AVTransport subscription for the
+// device. Without one no further events will come, so whatever was last
+// heard (play mode, crossfade, sleep timer...) can't be trusted to stay
+// current -- a shuffle toggled from the phone app would go unseen.
+function hasLiveAvSubscription(device) {
+  if (device._isSubscribed === false) return false;
+  const subs = Listener._deviceSubscriptions;
+  if (!Array.isArray(subs)) return true; // library internals changed; don't block on it
+  const sub = subs.find((s) => s.device === device);
+  if (!sub || !sub.subscriptions) return false;
+  return Object.values(sub.subscriptions).some((s) => s && s.endpoint === '/MediaRenderer/AVTransport/Event');
 }
 
 function eventTransportState(device) {
@@ -420,6 +435,7 @@ function eventTransportState(device) {
   const f = st.fields;
   if (f.TransportState === undefined || f.CurrentPlayMode === undefined || f.AVTransportURI === undefined) return null;
   if (f.AVTransportURI.startsWith('x-rincon:')) return null;
+  if (!hasLiveAvSubscription(device)) return null;
   return st;
 }
 
@@ -430,14 +446,17 @@ function markEventTransportStale(device, name, why) {
   debugLog.info('sonos', `Event transport state for ${name} set aside until the next event (${why})`);
 }
 
-// Remaining sleep time, per device: asked once per timer (each set or
-// cancel bumps SleepTimerGeneration), then counted down locally.
+// Remaining sleep time, per device: asked when the timer changes (each
+// set or cancel bumps SleepTimerGeneration) and counted down locally in
+// between -- but re-asked at least once a minute while a timer exists,
+// since whether Sonos keeps counting while paused isn't confirmed.
 // Generation "0" = no timer has been set since the speaker started.
+const SLEEP_TIMER_RECHECK_MS = 60 * 1000;
 const sleepTimerByDevice = new WeakMap(); // device -> { gen, remaining, at }
 async function sleepTimerFromEvents(device, ev, roomName) {
   const gen = ev.fields['r:SleepTimerGeneration'];
   const cached = sleepTimerByDevice.get(device);
-  if (gen !== undefined && cached && cached.gen === gen) {
+  if (gen !== undefined && cached && cached.gen === gen && (cached.remaining === 0 || Date.now() - cached.at < SLEEP_TIMER_RECHECK_MS)) {
     return Math.max(0, Math.round(cached.remaining - (Date.now() - cached.at) / 1000));
   }
   if (gen === '0') {
@@ -717,6 +736,9 @@ async function ensureSubscribed(device, name, reason) {
       if (pendingSubscribeTo.has(device)) return;
       debugLog.info('sonos', `Subscribing ${name} to events (${reason}; no live subscription found)`);
       device._isSubscribed = false;
+      // Whatever was heard before is from a subscription that's gone; the
+      // fresh one's first NOTIFY carries the full state again.
+      avStateByDevice.delete(device);
       const p = Listener.subscribeTo(device).finally(() => pendingSubscribeTo.delete(device));
       pendingSubscribeTo.set(device, p);
       await withTimeout(p, DEVICE_CALL_TIMEOUT_MS * 2, `subscribeTo(${name})`);
@@ -744,6 +766,9 @@ async function ensureSubscribed(device, name, reason) {
     const expected = sub === subs[0] ? GLOBAL_EVENT_ENDPOINTS.concat(DEVICE_EVENT_ENDPOINTS) : DEVICE_EVENT_ENDPOINTS;
     const have = new Set(Object.keys(sub.subscriptions).map((sid) => sub.subscriptions[sid].endpoint));
     const missing = expected.filter((ep) => !have.has(ep));
+    // Same reasoning when the transport subscription itself is re-added
+    // (done before the SUBSCRIBE so its first NOTIFY can't be wiped).
+    if (missing.includes('/MediaRenderer/AVTransport/Event')) avStateByDevice.delete(device);
     for (const ep of missing) {
       await withTimeout(sub.addSubscription(ep), DEVICE_CALL_TIMEOUT_MS, `subscribe ${ep} (${name})`);
     }
@@ -1603,12 +1628,32 @@ async function getNowPlaying(roomName) {
     // from that state when it's trustworthy -- see eventTransportState.
     let inputs = null;
     let ev = eventTransportState(device);
+    // Spot check: at most every EVENT_STATE_VERIFY_MS a lookup asks the
+    // speaker the full old way and compares. A subscription the speaker
+    // silently dropped (reboot, lost NOTIFY) leaves the library's
+    // bookkeeping intact, and on radio the track URI never changes, so
+    // neither of the other checks would catch a shuffle or crossfade
+    // toggled from the phone app.
+    let verifyAgainst = null;
+    if (ev && Date.now() - (ev.verifiedAt || 0) > EVENT_STATE_VERIFY_MS) {
+      verifyAgainst = { st: ev, seq: ev.seq, playMode: ev.fields.CurrentPlayMode, crossfade: ev.fields.CurrentCrossfadeMode === '1' };
+      ev = null;
+    }
     if (ev) {
+      const seqBefore = ev.seq;
       const evTrack = await device.currentTrack();
-      if ((evTrack.uri || '') !== (ev.fields.CurrentTrackURI || '')) {
-        // Mid track change the speaker can be a beat ahead of its own
-        // event -- or the events died. Either way: ask, this time.
+      if (ev.seq !== seqBefore) {
+        // An event landed while GetPositionInfo was out: the two may
+        // describe different moments. Not evidence of anything -- just
+        // ask the old way this once.
+        ev = null;
+      } else if ((evTrack.uri || '') !== (ev.fields.CurrentTrackURI || '')) {
+        // The speaker is on a different track than its events said and no
+        // event explains it: they've stopped arriving (or are about to
+        // catch up). Set them aside until the next one, and have the
+        // watchdog check the subscription (its cooldown limits this).
         markEventTransportStale(device, roomName, 'track URI differs from the speaker');
+        ensureSubscribed(device, roomName, 'track URI differs from event state');
         ev = null;
       } else {
         inputs = [
@@ -1636,6 +1681,14 @@ async function getNowPlaying(roomName) {
         return 0;
       })
     ]);
+    if (verifyAgainst && verifyAgainst.st.seq === verifyAgainst.seq) {
+      if (verifyAgainst.playMode === playMode && verifyAgainst.crossfade === crossfadeOn) {
+        verifyAgainst.st.verifiedAt = Date.now();
+      } else {
+        markEventTransportStale(device, roomName, 'spot check: play mode/crossfade differ from the speaker');
+        ensureSubscribed(device, roomName, 'event state failed spot check');
+      }
+    }
     const { shuffle: shuffleOn, repeat: repeatMode } = decomposePlayMode(playMode);
     if (looksLikeJunkText(track.title)) track.title = '';
     if (looksLikeJunkText(track.artist)) track.artist = '';
@@ -1756,11 +1809,21 @@ async function getNowPlaying(roomName) {
           trackNo = parseInt(pos.Track, 10) || 0;
         }
         if (trackNo > 0) {
-          // The speaker announces its real next track (shuffle included),
-          // so the one-item queue browse is only needed when that came
-          // without metadata.
+          // The speaker announces its real next track, so the one-item
+          // queue browse is only needed when that came without metadata --
+          // or when repeat is on or this is the last track, where the
+          // announced "next" (track 1 again, or this same track) isn't the
+          // queue's position+1 that Up Next and guardQueueAhead's
+          // RemoveTrackFromQueue(trackNo+1) mean.
           let nextItem = null;
-          if (ev && ev.next && ev.next.title) {
+          const queueLength = ev ? parseInt(ev.fields.NumberOfTracks, 10) || 0 : 0;
+          // With the Local Music Library on, guardQueueAhead may REMOVE the
+          // next queue entry, so it gets a live read: right after a Play
+          // Next the announced next track can still be the old one, and
+          // the wrong entry would go.
+          const eventNextIsQueueNext = ev && repeatMode !== 'all' && repeatMode !== 'one' && trackNo < queueLength
+            && !localScanner.getDatabase();
+          if (eventNextIsQueueNext && ev.next && ev.next.title) {
             nextItem = { title: ev.next.title, artist: ev.next.artist || '', uri: ev.fields['r:NextTrackURI'] || null };
           } else {
             const { items } = await browseContainerPaged(coordName, 'Q:0', trackNo, 1);
@@ -2474,6 +2537,7 @@ function isMultiAccountGroup(favorites, groupTitle) {
 // Returns the favorites-list entry the room's coordinator is playing, or
 // null. Radio/station favorites match the transport URI directly;
 // queue-backed favorites fall back to the remembered context.
+const FAVORITE_CONTEXT_GRACE_MS = 10000;
 async function resolveRoomFavorite(roomName) {
   const coordName = coordinatorNameFor(roomName);
   const device = findDevice(coordName);
@@ -2497,7 +2561,12 @@ async function resolveRoomFavorite(roomName) {
       }
     }
     if (!transportUri.startsWith('x-rincon-queue:')) {
-      roomFavoriteContext.delete(coordName); // left queue mode -- whatever we remembered is over
+      // Left queue mode -- whatever we remembered is over. Except in the
+      // first seconds after the panel itself started a favorite: the
+      // event-fed transport URI can still show what played before, and
+      // dropping the context then would lose the label for good.
+      const ctx = roomFavoriteContext.get(coordName);
+      if (!ctx || Date.now() - (ctx.at || 0) > FAVORITE_CONTEXT_GRACE_MS) roomFavoriteContext.delete(coordName);
     }
     if (transportUri.startsWith('x-rincon-queue:')) {
       const ctx = roomFavoriteContext.get(coordName);
@@ -2803,7 +2872,7 @@ async function playItemNow(roomName, uri, metadata) {
   if (!device) return;
   roomPlaylistContext.delete(roomName);
   roomLocalQueueContext.delete(roomName);
-  roomFavoriteContext.set(coordinatorNameFor(roomName), { uri, sid: (String(uri || '').match(/[?&]sid=(\d+)/) || [])[1] || null });
+  roomFavoriteContext.set(coordinatorNameFor(roomName), { uri, sid: (String(uri || '').match(/[?&]sid=(\d+)/) || [])[1] || null, at: Date.now() });
   debugLog.info('sonos', `playItem(${roomName}): ${metadata ? 'using item metadata' : 'no metadata available, falling back to bare URI'}`);
   await guarded(`playItem(${roomName})`, async () => {
     // Confirmed via real testing: calling setAVTransportURI right after
