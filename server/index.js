@@ -170,6 +170,22 @@ process.on('uncaughtException', (err) => {
   debugLog.error('server', `Uncaught exception: ${err.message}`);
 });
 
+// Clean stop (docker stop / container update / Ctrl+C): unsubscribe from
+// the speakers first -- otherwise each restart leaves a full set of
+// orphaned event subscriptions behind for 30 minutes (see sonos.shutdown).
+// Also matters because node runs as PID 1 in the container, where an
+// unhandled SIGTERM is ignored and Docker waits 10 s before killing it.
+let shuttingDown = false;
+async function gracefulExit(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  debugLog.info('server', `${signal} received, shutting down`);
+  await sonos.shutdown();
+  process.exit(0);
+}
+process.once('SIGTERM', () => gracefulExit('SIGTERM'));
+process.once('SIGINT', () => gracefulExit('SIGINT'));
+
 // ---------------- App config ----------------
 // Single endpoint the client fetches once at boot -- color, screensaver
 // timing, and extra tabs all come from here rather than separate calls.

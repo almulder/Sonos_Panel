@@ -694,6 +694,54 @@ const lastEventAt = new WeakMap(); // device -> ms timestamp of last NOTIFY
 const subscriptionCheckAt = new WeakMap(); // device -> last ensureSubscribed start
 const subscriptionCheckInFlight = new WeakSet();
 const pendingSubscribeTo = new WeakMap(); // device -> in-flight Listener.subscribeTo
+
+// Orphaned subscriptions. Speakers keep notifying a subscription until it
+// expires (30 min) unless the subscriber answers an error; the library
+// means to answer 404 for SIDs it doesn't know, but sets
+// `resp.statuscode` (lowercase -- not the real property), so it answers
+// 200 and the speaker carries on. Found the hard way: 22 left behind by
+// exited test processes measurably delayed Albert's Office's events to
+// every controller, the live panel included. This answers 412 for an
+// unknown SID -- but only once the same SID has been unknown for a
+// while, because a brand-new subscription's first NOTIFY can arrive a
+// moment before the library has recorded its SID, and rejecting that
+// would cancel a healthy subscription.
+const UNKNOWN_SID_GRACE_MS = 10000;
+const unknownSidFirstSeen = new Map(); // sid -> ms
+if (Listener && typeof Listener._handleMessage === 'function') {
+  const libraryHandleMessage = Listener._handleMessage.bind(Listener);
+  Listener._handleMessage = function (req, resp, body) {
+    const sid = req.headers && req.headers.sid;
+    const isNotify = String(req.method).toUpperCase() === 'NOTIFY' && String(req.url).toLowerCase() === '/notify';
+    const subs = Array.isArray(this._deviceSubscriptions) ? this._deviceSubscriptions : [];
+    if (isNotify && sid && !subs.some((s) => s.hasSubscription(sid))) {
+      const now = Date.now();
+      for (const [k, t] of unknownSidFirstSeen) if (now - t > 10 * UNKNOWN_SID_GRACE_MS) unknownSidFirstSeen.delete(k);
+      const first = unknownSidFirstSeen.get(sid);
+      if (first === undefined) unknownSidFirstSeen.set(sid, now);
+      else if (now - first > UNKNOWN_SID_GRACE_MS) {
+        unknownSidFirstSeen.delete(sid);
+        resp.statusCode = 412; // Precondition Failed: the UPnP way to say "no such subscription"
+        resp.end();
+        return;
+      }
+    }
+    return libraryHandleMessage(req, resp, body);
+  };
+}
+
+// Called on SIGTERM/SIGINT (index.js): unsubscribe from every speaker so a
+// restart -- every container update -- doesn't leave a full set of
+// orphaned subscriptions behind for the next 30 minutes.
+async function shutdown() {
+  if (usingMock || !Listener || typeof Listener.isListening !== 'function' || !Listener.isListening()) return;
+  try {
+    await withTimeout(Listener.stopListener(), 4000, 'unsubscribe from all speakers');
+    debugLog.info('sonos', 'Unsubscribed from speaker events');
+  } catch (err) {
+    debugLog.warn('sonos', `Unsubscribing on shutdown failed: ${err.message}`);
+  }
+}
 const RENEW_SETTLE_MS = 15000;
 
 // More than one SID for the same endpoint (left over from an earlier race,
@@ -3677,6 +3725,7 @@ module.exports = {
   getNowPlaying,
   getNowPlayingShared,
   invalidateNowPlaying,
+  shutdown,
   coordinatorNameFor,
   play,
   pause,
