@@ -168,6 +168,17 @@ PoE panel whose CPU is ~13x slower than a laptop):
 
 ## Bug fixes
 
+### Updated: v0.18.2 - Oct 26, 2026
+
+- **The Play button follows a song you start from a playlist or the
+  Local Library**: the song started but the button kept showing Play
+  for 4-8 seconds. Loading a new queue makes the speaker slow to
+  announce that it's playing, and the panel was waiting for that
+  announcement. It now asks the speaker directly when its last
+  announcement looks out of date, and updates the screens as soon as
+  the regular check-in sees the room playing (about 3 seconds after the
+  tap in testing, down from up to 9)
+
 ### Updated: v0.18.1 - Oct 26, 2026
 
 - **Tapping a song in a playlist plays that song again**: when a

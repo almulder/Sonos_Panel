@@ -411,6 +411,9 @@ function mergeAvTransportEvent(device, data) {
   // Present-but-empty means "no next track" (radio, end of queue); the
   // library only adds the parsed form when there is metadata.
   if (typeof data['r:NextTrackMetaData'] === 'string') st.next = data['r:NextTrackMetaDataParsed'] || null;
+  // When the play state was last announced -- not lastEventAt, which queue
+  // events bump nonstop during a playlist start (see readDeviceLive).
+  if (typeof data.TransportState === 'string') st.transportStateAt = Date.now();
   if (!st.staleUntil || typeof data[st.staleUntil] === 'string') {
     st.stale = false;
     st.staleUntil = null;
@@ -454,7 +457,13 @@ function requireEventStateRecheck(device) {
 // meantime says nothing about TransportState.
 function markEventTransportStale(device, name, why, untilField) {
   const st = avStateByDevice.get(device);
-  if (!st || st.stale) return;
+  if (!st) return;
+  if (st.stale) {
+    // Already aside: an unrelated event would clear it while the play
+    // state is still the old one, so take on the stricter condition.
+    if (untilField && !st.staleUntil) st.staleUntil = untilField;
+    return;
+  }
   st.stale = true;
   st.staleUntil = untilField || null;
   debugLog.info('sonos', `Event transport state for ${name} set aside until the next event (${why})`);
@@ -1078,6 +1087,7 @@ const lastReachable = new WeakMap(); // device -> reachable at the previous poll
 const UNREACHABLE_AFTER_SILENT_MS = 45 * 1000;
 const lastProbeOkAt = new Map(); // room name -> ms
 async function readDeviceLive(device, name) {
+  const readStartedAt = Date.now();
   const previous = lastRoomsByName.get(name) || { volume: 0, playing: false, muted: false };
   let volume;
   try {
@@ -1122,9 +1132,14 @@ async function readDeviceLive(device, name) {
   // late (hardware-observed), so "quiet" never held and the Play button
   // sat on paused. Setting the event state aside is cheap (lookups ask
   // the speaker until an event carrying TransportState arrives), so a
-  // settled live state wins straight away.
-  const ev = eventTransportState(device);
-  if (settled && ev && Helpers.TranslateState(ev.fields.TransportState) !== state) {
+  // settled live state wins straight away. Not when a play state was
+  // announced while this read was out (a pause racing the poll): it's the newer
+  // truth, and marking it would keep a quiet paused room off the event
+  // path for hours. The raw state, not eventTransportState(), so a state
+  // already set aside for another reason still gets the stricter rule.
+  const st = avStateByDevice.get(device);
+  if (settled && st && st.fields.TransportState !== undefined && (st.transportStateAt || 0) <= readStartedAt
+    && Helpers.TranslateState(st.fields.TransportState) !== state) {
     markEventTransportStale(device, name, 'live play state differs', 'TransportState');
   }
 
