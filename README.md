@@ -168,6 +168,26 @@ PoE panel whose CPU is ~13x slower than a laptop):
 
 ## Bug fixes
 
+### Updated: v0.18.1 - Oct 26, 2026
+
+- **Tapping a song in a playlist plays that song again**: when a
+  playlist was loaded into a room that was already playing from its
+  queue, every song after the first went in backwards (1, 29, 28 ... 2),
+  so the tapped song was usually a different one. The same reversal
+  hit playing tracks from the Local Library and adding several songs
+  to the end of the queue. Songs now always go in in order
+- **Shuffled rooms start the song you tapped**: with shuffle on, the
+  speaker numbers its queue in shuffled order, so starting a playlist
+  at "song 2" landed on a random song. The panel now finds where the
+  tapped song ended up
+- **Renaming a playlist works again**: it failed with an error, as did
+  the lookup of music-service account names used to label favorites
+- **Starting a playlist, album or queue song is a little quicker**:
+  switching a room to its queue asked the speaker for its hardware
+  address every time and sent an extra Play before the real one (which
+  could sound the previous song for a moment). The address is now
+  remembered and the extra Play is gone
+
 ### Updated: v0.18.0 - Oct 26, 2026
 
 - **Restarts no longer leave stale event subscriptions behind**: the
