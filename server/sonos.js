@@ -1567,7 +1567,7 @@ async function addUriToPlaylist(playlistId, uri, metadata) {
 // supplies both.
 async function renameSonosPlaylist(playlistId, currentTitle, newTitle) {
   if (usingMock) return { ok: true };
-  const device = devices[0];
+  const device = anyDevice();
   if (!device) throw new Error('No Sonos device available');
   await guarded(`renameSonosPlaylist(${playlistId})`, () =>
     withTimeout(device.contentDirectoryService()._request('UpdateObject', {
@@ -2546,7 +2546,7 @@ async function getHouseholdAccounts() {
   if (accountsCache.map && Date.now() - accountsCache.at < ACCOUNTS_CACHE_MS) return accountsCache.map;
   const map = {};
   try {
-    const device = devices[0];
+    const device = anyDevice();
     if (!device) return map;
     const xml = await fetchAccountsXml(device.host);
     // <Account Type="60423" SerialNum="1" ...><UN>user@x</UN><NN>Nick</NN></Account>
@@ -2952,6 +2952,62 @@ function playItem(roomName, uri, metadata) {
   return run;
 }
 
+// Point the transport at the speaker's own queue, without playing.
+// Not device.selectQueue(): from the 'sonos' library's source it asks
+// the speaker for its MAC (GetZoneInfo) on every call just to build this
+// URI, and then -- via setAVTransportURI's default -- sends Play. Every
+// caller here follows up with its own selectTrack/Play, so that cost two
+// wasted round trips per tap and could sound the previous track for a
+// moment before the new one was selected. The queue URI is fixed for a
+// device (MAC + port), so it's built once and kept.
+const queueUriByDevice = new WeakMap();
+async function selectQueue(device) {
+  let uri = queueUriByDevice.get(device);
+  if (!uri) {
+    const info = await device.getZoneInfo();
+    uri = `x-rincon-queue:RINCON_${info.MACAddress.replace(/:/g, '')}0${device.port}#0`;
+    queueUriByDevice.set(device, uri);
+  }
+  await device.avTransportService().SetAVTransportURI({ InstanceID: 0, CurrentURI: uri, CurrentURIMetaData: '' });
+}
+
+// Append one item to the end of the queue. Not device.queue(): that sends
+// EnqueueAsNext=1, and while the transport is already on the queue the
+// speaker treats that as "insert after the current track" -- so a
+// replace-the-queue loop (flush, then queue each track) built the queue
+// as 1, N, N-1, ... 2 and the tapped track played the wrong song
+// (hardware-observed on a 29-track playlist). EnqueueAsNext=0 with
+// position 0 appends whatever the transport is doing.
+async function appendToQueue(device, uri, metadata) {
+  return device.avTransportService().AddURIToQueue({
+    InstanceID: 0,
+    EnqueuedURI: Helpers.EncodeXml(uri),
+    EnqueuedURIMetaData: Helpers.EncodeXml(metadata || ''),
+    DesiredFirstTrackNumberEnqueued: 0,
+    EnqueueAsNext: 0
+  });
+}
+
+// Where in the queue to start so `uri` plays. With shuffle on, the speaker
+// numbers the queue in its shuffled play order (for Seek TRACK_NR and for
+// a Q:0 browse alike), so "track N of the playlist" was a random song in
+// a shuffled room (hardware-observed). Then the URI is looked up in the
+// play order; otherwise the playlist position is already right.
+async function queuePositionForPlay(device, roomName, uri, position) {
+  try {
+    const { PlayMode } = await device.avTransportService().GetTransportSettings();
+    if (!String(PlayMode).startsWith('SHUFFLE')) return position;
+    const q = await device.contentDirectoryService().GetResult({
+      ObjectID: 'Q:0', BrowseFlag: 'BrowseDirectChildren', Filter: '*', StartingIndex: 0, RequestedCount: 1000, SortCriteria: ''
+    });
+    const i = (q.items || []).findIndex((it) => it.uri === uri);
+    return i >= 0 ? i + 1 : position;
+  } catch (err) {
+    debugLog.warn('sonos', `queuePositionForPlay(${roomName}): ${err.message} -- starting at track ${position}`);
+    return position;
+  }
+}
+
 // flush -> queue(uri + resMD) -> selectQueue -> play. Used for container
 // favorites (Sonos answers UPnP 714 if those are set as the transport URI
 // directly) and as the fallback for service items refused as a direct URI.
@@ -2960,8 +3016,8 @@ function playItem(roomName, uri, metadata) {
 // so Play is retried with a growing pause instead of failing on attempt 1.
 async function playViaQueue(device, roomName, uri, metadata) {
   await device.flush();
-  await device.queue({ uri, metadata });
-  await device.selectQueue();
+  await appendToQueue(device, uri, metadata);
+  await selectQueue(device);
   let lastErr;
   for (let attempt = 1; attempt <= 6; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
@@ -3112,7 +3168,7 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
     const queuedUris = [];
     for (const track of playableTracks) {
       try {
-        await device.queue({ uri: track.uri, metadata: track.metadata || buildTrackMetadata(track) });
+        await appendToQueue(device, track.uri, track.metadata || buildTrackMetadata(track));
         queuedUris.push(track.uri);
       } catch (err) {
         debugLog.warn('sonos', `playPlaylistTrack(${roomName}): Sonos refused "${track.title}" (${track.uri}) -- skipping it: ${err.message}`);
@@ -3122,9 +3178,9 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
     if (queuedUris.length < playableTracks.length) {
       debugLog.warn('sonos', `playPlaylistTrack(${roomName}): queued ${queuedUris.length} of ${playableTracks.length} track(s); the rest were refused`);
     }
-    await device.selectQueue();
+    await selectQueue(device);
     const queuedTarget = queuedUris.indexOf(trackUri);
-    await device.selectTrack(queuedTarget >= 0 ? queuedTarget + 1 : 1);
+    await device.selectTrack(await queuePositionForPlay(device, roomName, trackUri, queuedTarget >= 0 ? queuedTarget + 1 : 1));
     await device.play();
     roomPlaylistContext.set(roomName, {
       id: playlistContainerId,
@@ -3294,11 +3350,12 @@ async function getQueue(roomName, start = 0) {
   };
 }
 
-// The AddURIToQueue positioning semantics, hardware-verified elsewhere
-// in this file: EnqueueAsNext=1 with DesiredFirstTrackNumberEnqueued=0
-// appends to the end (that's what device.queue() does and what
-// playTracksAsQueue has always used); a non-zero Desired number inserts
-// AT that position. "Play next" = insert at current+1; "play now" =
+// The AddURIToQueue positioning semantics: a non-zero
+// DesiredFirstTrackNumberEnqueued inserts AT that position. Desired=0 is
+// "append" only with EnqueueAsNext=0 -- with EnqueueAsNext=1 a speaker
+// already on its queue inserts after the current track instead, which
+// reversed multi-track "add to end" (see appendToQueue).
+// "Play next" = insert at current+1; "play now" =
 // same insert, then jump to the first inserted track -- the rest of the
 // queue survives, which is the whole point versus the replace-the-world
 // play paths.
@@ -3333,12 +3390,12 @@ async function addTracksToQueue(roomName, tracks, mode) {
         EnqueuedURI: Helpers.EncodeXml(t.uri),
         EnqueuedURIMetaData: Helpers.EncodeXml(t.metadata || ''),
         DesiredFirstTrackNumberEnqueued: desired,
-        EnqueueAsNext: 1
+        EnqueueAsNext: desired === 0 ? 0 : 1
       });
       if (firstEnqueued === null) firstEnqueued = parseInt(res.FirstTrackNumberEnqueued, 10) || null;
     }
     if (mode === 'now' && firstEnqueued) {
-      if (!playingFromQueue) await device.selectQueue();
+      if (!playingFromQueue) await selectQueue(device);
       await device.selectTrack(firstEnqueued);
       await device.play();
     }
@@ -3417,7 +3474,7 @@ async function jumpToQueueTrack(roomName, trackNo) {
     } catch (err) {
       debugLog.warn('sonos', `jumpToQueueTrack(${roomName}): queue-mode check failed: ${err.message}`);
     }
-    if (!playingFromQueue) await device.selectQueue();
+    if (!playingFromQueue) await selectQueue(device);
     await device.selectTrack(trackNo);
     await device.play();
   });
@@ -3435,7 +3492,7 @@ async function playTracksAsQueue(roomName, tracks) {
     for (const track of tracks) {
       if (skipIfIncompatible(`playTracksAsQueue(${roomName})`, track)) continue;
       try {
-        await device.queue({ uri: track.uri, metadata: buildLocalTrackMetadata(track) });
+        await appendToQueue(device, track.uri, buildLocalTrackMetadata(track));
         queued += 1;
       } catch (err) {
         debugLog.warn('sonos', `playTracksAsQueue(${roomName}): Sonos refused "${track.title || track.uri}" (${track.uri}) -- skipping it: ${err.message}`);
@@ -3445,7 +3502,7 @@ async function playTracksAsQueue(roomName, tracks) {
     if (queued < tracks.length) {
       debugLog.warn('sonos', `playTracksAsQueue(${roomName}): queued ${queued} of ${tracks.length} track(s); the rest were refused`);
     }
-    await device.selectQueue();
+    await selectQueue(device);
     await device.play();
   });
   roomLocalQueueContext.set(roomName, new Map(tracks.map((t) => [t.uri, t])));
