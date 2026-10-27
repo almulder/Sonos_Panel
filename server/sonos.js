@@ -2997,13 +2997,25 @@ async function queuePositionForPlay(device, roomName, uri, position) {
   try {
     const { PlayMode } = await device.avTransportService().GetTransportSettings();
     if (!String(PlayMode).startsWith('SHUFFLE')) return position;
-    const q = await device.contentDirectoryService().GetResult({
-      ObjectID: 'Q:0', BrowseFlag: 'BrowseDirectChildren', Filter: '*', StartingIndex: 0, RequestedCount: 1000, SortCriteria: ''
-    });
-    const i = (q.items || []).findIndex((it) => it.uri === uri);
-    return i >= 0 ? i + 1 : position;
+    // Sonos caps a Browse at ~100 items whatever is requested, so page
+    // until the URI turns up or the queue runs out.
+    for (let start = 0; ;) {
+      const q = await device.contentDirectoryService().GetResult({
+        ObjectID: 'Q:0', BrowseFlag: 'BrowseDirectChildren', Filter: '*', StartingIndex: start, RequestedCount: 100, SortCriteria: ''
+      });
+      const items = q.items || [];
+      const i = items.findIndex((it) => it.uri === uri);
+      if (i >= 0) return start + i + 1;
+      start += items.length;
+      if (items.length === 0 || start >= (parseInt(q.total, 10) || 0)) {
+        debugLog.warn('sonos', `queuePositionForPlay(${roomName}): shuffled, but ${uri} isn't in the queue as sent -- starting at track ${position}`);
+        return position;
+      }
+    }
   } catch (err) {
-    debugLog.warn('sonos', `queuePositionForPlay(${roomName}): ${err.message} -- starting at track ${position}`);
+    // The library rejects with a raw SOAP fault object, not an Error.
+    const message = (err && err.message) || JSON.stringify(err);
+    debugLog.warn('sonos', `queuePositionForPlay(${roomName}): ${message} -- starting at track ${position}`);
     return position;
   }
 }
