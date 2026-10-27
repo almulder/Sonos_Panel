@@ -411,7 +411,10 @@ function mergeAvTransportEvent(device, data) {
   // Present-but-empty means "no next track" (radio, end of queue); the
   // library only adds the parsed form when there is metadata.
   if (typeof data['r:NextTrackMetaData'] === 'string') st.next = data['r:NextTrackMetaDataParsed'] || null;
-  st.stale = false;
+  if (!st.staleUntil || typeof data[st.staleUntil] === 'string') {
+    st.stale = false;
+    st.staleUntil = null;
+  }
   st.seq++;
   avStateByDevice.set(device, st);
 }
@@ -446,10 +449,14 @@ function requireEventStateRecheck(device) {
   if (st) st.verifiedAt = 0;
 }
 
-function markEventTransportStale(device, name, why) {
+// untilField: only an event carrying this variable clears it -- for a
+// stale play state, an unrelated event (queue length, next track) in the
+// meantime says nothing about TransportState.
+function markEventTransportStale(device, name, why, untilField) {
   const st = avStateByDevice.get(device);
   if (!st || st.stale) return;
   st.stale = true;
+  st.staleUntil = untilField || null;
   debugLog.info('sonos', `Event transport state for ${name} set aside until the next event (${why})`);
 }
 
@@ -1110,9 +1117,15 @@ async function readDeviceLive(device, name) {
     || (settled && device._state !== undefined && device._state !== state);
   if (quiet && stale) ensureSubscribed(device, name, 'poll disagreed with event cache');
   // The same evidence for the event-fed transport state getNowPlaying uses.
+  // No quiet-period here, unlike the resubscribe above: a playlist start
+  // keeps queue events flowing while the PLAYING event itself came 4-8 s
+  // late (hardware-observed), so "quiet" never held and the Play button
+  // sat on paused. Setting the event state aside is cheap (lookups ask
+  // the speaker until an event carrying TransportState arrives), so a
+  // settled live state wins straight away.
   const ev = eventTransportState(device);
-  if (quiet && settled && ev && Helpers.TranslateState(ev.fields.TransportState) !== state) {
-    markEventTransportStale(device, name, 'live play state differs');
+  if (settled && ev && Helpers.TranslateState(ev.fields.TransportState) !== state) {
+    markEventTransportStale(device, name, 'live play state differs', 'TransportState');
   }
 
   return { volume, playing: state ? state === 'playing' : previous.playing, muted, reachable: true };
@@ -1248,6 +1261,21 @@ function forgetGroupVolumesWhereMembersMoved(freshRooms) {
   }
 }
 
+// Likewise for play state: screens get now-playing by push, and pushes
+// are triggered by speaker events. After a playlist rebuilt the queue the
+// PLAYING event came 4-8 s late (hardware-observed), so the last push
+// still said paused while the room list -- fed by this poll -- already
+// said playing. A coordinator whose polled play state moved gets a push
+// now instead of waiting for the event.
+function pushNowPlayingWherePlayStateMoved(freshRooms) {
+  for (const r of freshRooms) {
+    const prev = lastRoomsByName.get(r.name);
+    if (!prev || prev.playing === r.playing || r.reachable === false) continue;
+    invalidateNowPlaying(r.name);
+    if ((r.coordinator || r.name) === r.name && nowPlayingChangedCallback) nowPlayingChangedCallback(r.name);
+  }
+}
+
 async function getRooms() {
   if (usingMock) return [...mockState.rooms].sort((a, b) => a.name.localeCompare(b.name));
   return guarded('getRooms', async () => {
@@ -1273,6 +1301,7 @@ async function getRooms() {
     const topologyChanged = rooms.some((r) => { const prev = lastRoomsByName.get(r.name); return prev && prev.coordinator !== r.coordinator; });
     if (topologyChanged) invalidateGroupVolume(null);
     else forgetGroupVolumesWhereMembersMoved(rooms);
+    pushNowPlayingWherePlayStateMoved(rooms);
     lastRoomsByName = new Map(rooms.map((r) => [r.name, r]));
     return sanitizeRoomsForClient(rooms);
   });
@@ -1305,6 +1334,7 @@ async function getRoomsTargeted(targetRoomNames) {
     );
 
     forgetGroupVolumesWhereMembersMoved(updates);
+    pushNowPlayingWherePlayStateMoved(updates);
     updates.forEach((room) => lastRoomsByName.set(room.name, room));
     return sanitizeRoomsForClient([...lastRoomsByName.values()].sort((a, b) => a.name.localeCompare(b.name)));
   });
@@ -1784,7 +1814,12 @@ async function getNowPlaying(roomName) {
     }
     const [track, state, playMode, crossfadeOn, sleepTimerRemainingSeconds] = inputs || await Promise.all([
       device.currentTrack(),
-      device.getCurrentState(),
+      // Asked live, not device.getCurrentState() (the library's event
+      // cache): this path runs exactly when events are behind. After a
+      // playlist rebuilt the queue, the speaker sent its PLAYING event
+      // 4-8 s late (hardware-observed) and the Play button showed paused
+      // all that time.
+      liveTransportState(device, roomName).then((s) => s || device.getCurrentState()),
       device.getPlayMode().catch((err) => {
         debugLog.warn('sonos', `getPlayMode() failed for ${roomName}: ${err.message}`);
         readFailed = true;
