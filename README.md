@@ -180,8 +180,10 @@ PoE panel whose CPU is ~13x slower than a laptop):
   favorites, playlists and tracks were added or removed. Each panel is
   covered while its refresh runs (with scan progress for the library),
   so it can't be started twice
-- **Album art glows in full screen**: the full-screen now-playing view
-  puts a soft glow around the cover in the cover's own colour
+- **Album art glows in its own colours**: a blurred copy of the cover
+  glows around it, edge by edge, and the background takes on the cover's
+  colour -- the whole screen in full-screen view, and the now-playing card
+  on the main screen
 - **No empty tab bar**: with no extra tabs configured, the tab bar is
   hidden and the Sonos screen and volume slider use the full height
 

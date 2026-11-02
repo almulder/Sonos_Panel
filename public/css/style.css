@@ -826,38 +826,51 @@ button {
 .sonostop--stage .nowplaying__art {
   width: min(46vh, 420px);
   height: min(46vh, 420px);
-  position: relative;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
-/* The glow, Pandora-style: a larger, heavily blurred copy of the cover
-   itself sits behind it, so each edge glows in that part of the cover's
-   colours. background-image inherits the cover set inline by sonosView.js
-   (the service-icon fallback is excluded via :not -- see
+/* The glow, Pandora-style: a larger, blurred copy of the cover itself sits
+   behind it, so each edge glows in that part of the cover's colours --
+   small on the main screen's now-playing card, big in full screen.
+   background-image inherits the cover set inline by sonosView.js (no real
+   cover -- service icon or nothing playing -- is excluded via :not, see
    .nowplaying__art--icon). Its own compositing layer, so the progress bar
-   ticking underneath doesn't re-blur it; nothing animates continuously. */
-.sonostop--stage .nowplaying__art:not(.nowplaying__art--icon)::before {
+   ticking nearby doesn't re-blur it; nothing animates continuously.
+   .nowplaying is its own stacking context so the copy (z-index -1) sits
+   just behind the cover, above the card / full-screen background. */
+.nowplaying {
+  isolation: isolate;
+  /* The card takes the cover's colour too, strongest on the cover's side
+     (same --art-bg as the full-screen background; unset = plain panel).
+     Full screen keeps its own transparent card over the tinted page. */
+  background: radial-gradient(120% 170% at 8% 50%, var(--art-bg, var(--panel)) 0%, var(--panel) 72%);
+}
+.nowplaying__art {
+  position: relative;
+}
+.nowplaying__art:not(.nowplaying__art--icon)::before {
   content: '';
   position: absolute;
-  inset: -14%;
+  inset: -12%;
   z-index: -1;
-  border-radius: 24px;
+  border-radius: 14px;
   background-image: inherit;
   background-size: cover;
   background-position: center;
-  filter: blur(42px) saturate(1.5);
-  opacity: 0.85;
+  filter: blur(14px) saturate(1.7);
+  opacity: 0.95;
   transform: translateZ(0);
   will-change: transform;
   pointer-events: none;
 }
+.sonostop--stage .nowplaying__art:not(.nowplaying__art--icon)::before {
+  inset: -14%;
+  border-radius: 24px;
+  filter: blur(42px) saturate(1.5);
+  opacity: 0.85;
+}
 /* ...and the whole full-screen background takes on the cover's colour
    (--art-bg is a dark shade of it, set on .app by sonosView.js; unset =
    the normal background). */
-/* Own stacking context, so the blurred copy (z-index -1) sits just behind
-   the cover instead of falling behind .app's tinted background below. */
-.sonostop--stage .nowplaying {
-  isolation: isolate;
-}
 .app.is-fullscreen {
   background: radial-gradient(130% 100% at 50% 22%, var(--art-bg, var(--bg)) 0%, var(--bg) 78%);
 }
