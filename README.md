@@ -182,10 +182,12 @@ PoE panel whose CPU is ~13x slower than a laptop):
   so it can't be started twice
 - **Album art glows in its own colours**: a blurred copy of the cover
   glows around it, edge by edge, and the background takes on the cover's
-  colour -- the whole screen in full-screen view, and the now-playing card
-  on the main screen
+  colour -- the whole screen in full-screen view and on the now-playing
+  screensaver, and the now-playing card on the main screen
 - **No empty tab bar**: with no extra tabs configured, the tab bar is
   hidden and the Sonos screen and volume slider use the full height
+- **Room list header stays put**: the Groups row (with the speaker
+  refresh button) no longer scrolls away with the rooms
 
 ## Bug fixes
 

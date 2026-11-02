@@ -98,7 +98,8 @@ const Screensaver = (() => {
 
     // A transform, not left/top: it moves the already-painted block (art
     // glow included) on the GPU instead of re-laying-out every frame.
-    bounceEl.style.transform = `translate(${x}px, ${y}px)`;
+    // Whole pixels: fractional ones can make the text shimmer on the tablet.
+    bounceEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 
     rafId = requestAnimationFrame(bounceTick);
   }
@@ -123,6 +124,8 @@ const Screensaver = (() => {
     const startMaxY = Math.max(0, window.innerHeight - 200);
     x = Math.random() * startMaxX;
     y = Math.random() * startMaxY;
+    // Placed now, so the first frame isn't drawn at the last session's spot.
+    bounceEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 
     rafId = requestAnimationFrame(bounceTick);
     // Keeps track/artist current while showing, and lets it switch
