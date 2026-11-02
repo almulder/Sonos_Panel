@@ -857,7 +857,7 @@ button {
   background-size: cover;
   background-position: center;
   filter: blur(14px) saturate(1.7);
-  opacity: 0.24;
+  opacity: 0.38;
   transform: translateZ(0);
   will-change: transform;
   pointer-events: none;
