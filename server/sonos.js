@@ -345,9 +345,15 @@ function rescanSpeakers() {
 }
 
 async function doRescanSpeakers() {
+  // Always logged, start and outcome -- a check that found no changes used
+  // to leave no trace, so there was no telling whether it had run.
+  debugLog.info('sonos', `Speaker re-check requested (${usingMock ? 'running on demo data -- trying full discovery' : `${devicesByName.size} speaker(s) known`})`);
   if (usingMock) {
     await init();
-    if (usingMock) return { ok: false, error: 'No Sonos speakers answered on the network', added: [], removed: [], total: 0 };
+    if (usingMock) {
+      debugLog.warn('sonos', 'Speaker re-check: still no Sonos speakers found on the network');
+      return { ok: false, error: 'No Sonos speakers answered on the network', added: [], removed: [], total: 0 };
+    }
     debugLog.info('sonos', `Speaker re-check: left demo data, found ${devicesByName.size} speaker(s)`);
     return { ok: true, added: [...displayNameByKey.values()].sort(), removed: [], total: devicesByName.size, leftDemo: true };
   }
@@ -360,7 +366,10 @@ async function doRescanSpeakers() {
       // try the next one -- one unplugged speaker mustn't fail the check
     }
   }
-  if (!groups) return { ok: false, error: 'None of the known speakers answered', added: [], removed: [], total: devicesByName.size };
+  if (!groups) {
+    debugLog.warn('sonos', 'Speaker re-check: none of the known speakers answered');
+    return { ok: false, error: 'None of the known speakers answered', added: [], removed: [], total: devicesByName.size };
+  }
 
   const members = new Map(); // key -> ZoneGroupMember, first one wins (same as init)
   for (const zone of groups) {
@@ -413,6 +422,8 @@ async function doRescanSpeakers() {
   }
   if (added.length || removed.length || notResponding.length) {
     debugLog.info('sonos', `Speaker re-check: added ${added.join(', ') || 'none'}; not responding ${notResponding.join(', ') || 'none'}; removed ${removed.join(', ') || 'none'}; ${devicesByName.size} total`);
+  } else {
+    debugLog.info('sonos', `Speaker re-check done: no changes, ${devicesByName.size} speaker(s)`);
   }
   return { ok: true, added: added.sort(), removed: removed.sort(), notResponding: notResponding.sort(), total: devicesByName.size };
 }

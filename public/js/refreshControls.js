@@ -5,19 +5,19 @@
 // tabs (re-read Sonos Favorites and Playlists, and rescan the Local
 // Library if one is mounted). Both work without restarting the container.
 //
-// While a refresh runs, its section gets an overlay so it can't be
-// started twice or used half-updated; when it's done a popup in the
-// middle of the screen says what changed. A library rescan can take a
-// few minutes on a big collection, so its progress is shown in the
-// overlay (polled from /api/local/status -- simpler and sturdier than
-// following the websocket, which may reconnect mid-scan).
+// While a refresh runs only its button shows it (spinning, can't be
+// pressed again, with the scan's percentage for a library rescan) -- the
+// panel itself stays usable, since the speakers keep playing and a
+// library rescan can take minutes on a big collection. When it's done,
+// the result appears over that panel with an OK button and stays until
+// tapped. Scan progress is polled from /api/local/status -- simpler and
+// sturdier than following the websocket, which may reconnect mid-scan.
 
 const RefreshControls = (() => {
   const SCAN_POLL_MS = 2000;
-  const DONE_POPUP_MS = 7000;
   const REQUEST_TIMEOUT_MS = 60 * 1000;
-  // Past this the overlay comes down and the scan just carries on in the
-  // background (a big library on a slow share can take this long).
+  // Past this the button stops waiting and the scan just carries on in
+  // the background (a big library on a slow share can take this long).
   const SCAN_WAIT_MAX_MS = 20 * 60 * 1000;
   // A scan we asked for that hasn't shown any sign of running by now isn't
   // going to.
@@ -45,48 +45,49 @@ const RefreshControls = (() => {
     return { status: res.status, body };
   }
 
-  // ---------------- Overlays ----------------
+  // ---------------- Button state ----------------
 
-  function showOverlay(sectionEl, text) {
-    let overlay = sectionEl.querySelector('.refreshoverlay');
-    if (!overlay) {
-      overlay = document.createElement('div');
-      overlay.className = 'refreshoverlay';
-      overlay.innerHTML = '<div class="refreshoverlay__spinner"></div><p class="refreshoverlay__text"></p>';
-      // Swallow taps so nothing underneath runs mid-refresh.
-      overlay.addEventListener('click', (e) => e.stopPropagation());
-      sectionEl.appendChild(overlay);
-    }
-    overlay.querySelector('.refreshoverlay__text').textContent = text;
+  // Per kind ('speakers' / 'sources'): whether it's running and the short
+  // progress text for the badge. Kept here, not on the element, because the
+  // speakers button is rebuilt with the Groups row on every room-list render.
+  const busyState = { speakers: { busy: false, badge: '' }, sources: { busy: false, badge: '' } };
+
+  function applyBusy(btn, kind) {
+    const st = busyState[kind];
+    btn.classList.toggle('is-busy', st.busy);
+    btn.disabled = st.busy;
+    btn.setAttribute('aria-busy', String(st.busy));
+    const badge = btn.querySelector('.refreshbtn__badge');
+    badge.textContent = st.badge;
+    badge.style.display = st.busy && st.badge ? '' : 'none';
   }
 
-  function hideOverlay(sectionEl) {
-    const overlay = sectionEl.querySelector('.refreshoverlay');
-    if (overlay) overlay.remove();
+  function setBusy(kind, busy, badge) {
+    busyState[kind] = { busy, badge: busy ? (badge || '') : '' };
+    document.querySelectorAll(`.refreshbtn[data-refresh="${kind}"]`).forEach((btn) => applyBusy(btn, kind));
   }
 
-  let popupTimer = null;
-  function showDonePopup(title, lines) {
-    let popup = document.getElementById('refreshDone');
-    if (!popup) {
-      popup = document.createElement('div');
-      popup.id = 'refreshDone';
-      popup.className = 'refreshdone';
-      popup.innerHTML = '<div class="refreshdone__sheet"><p class="refreshdone__title"></p><ul class="refreshdone__lines"></ul></div>';
-      popup.addEventListener('click', () => { popup.style.display = 'none'; });
-      document.body.appendChild(popup);
-    }
-    popup.querySelector('.refreshdone__title').textContent = title;
-    const list = popup.querySelector('.refreshdone__lines');
-    list.innerHTML = '';
+  // ---------------- Result card ----------------
+
+  // Over the section it's about, until OK is tapped. The card covers only
+  // that section, so the rest of the panel stays usable meanwhile.
+  function showResult(sectionEl, title, lines) {
+    const old = sectionEl.querySelector('.refreshresult');
+    if (old) old.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'refreshresult';
+    overlay.innerHTML = '<div class="refreshresult__sheet"><p class="refreshresult__title"></p><ul class="refreshresult__lines"></ul><button class="refreshresult__ok">OK</button></div>';
+    overlay.querySelector('.refreshresult__title').textContent = title;
+    const list = overlay.querySelector('.refreshresult__lines');
     lines.forEach((line) => {
       const li = document.createElement('li');
       li.textContent = line;
       list.appendChild(li);
     });
-    popup.style.display = '';
-    clearTimeout(popupTimer);
-    popupTimer = setTimeout(() => { popup.style.display = 'none'; }, DONE_POPUP_MS);
+    // Taps on the card or around it mustn't reach the list underneath.
+    overlay.addEventListener('click', (e) => e.stopPropagation());
+    overlay.querySelector('.refreshresult__ok').addEventListener('click', () => overlay.remove());
+    sectionEl.appendChild(overlay);
   }
 
   // ---------------- Speakers ----------------
@@ -95,7 +96,7 @@ const RefreshControls = (() => {
     if (speakersBusy) return;
     speakersBusy = true;
     const section = document.getElementById('sonosRoomlist');
-    showOverlay(section, 'Checking speakers…');
+    setBusy('speakers', true);
     const lines = [];
     let title = 'Refresh done';
     try {
@@ -125,10 +126,10 @@ const RefreshControls = (() => {
       title = 'Speaker check failed';
       lines.push(err.message);
     } finally {
-      hideOverlay(section);
+      setBusy('speakers', false);
       speakersBusy = false;
     }
-    showDonePopup(title, lines);
+    showResult(section, title, lines);
   }
 
   // ---------------- Music sources ----------------
@@ -137,13 +138,13 @@ const RefreshControls = (() => {
     if (sourcesBusy) return;
     sourcesBusy = true;
     const section = document.getElementById('sourcePanel');
-    showOverlay(section, 'Refreshing Favorites and Playlists…');
+    setBusy('sources', true);
     const lines = [];
     let failed = false;
     try {
       const [sonosResult, libraryResult] = await Promise.all([
         postJson('/api/sonos/refresh-sources'),
-        rescanLibrary((text) => showOverlay(section, text))
+        rescanLibrary((badge) => setBusy('sources', true, badge))
       ]);
       if (sonosResult.status === 200) {
         lines.push(describeList('Favorites', sonosResult.body.favorites));
@@ -161,10 +162,10 @@ const RefreshControls = (() => {
       failed = true;
       lines.push(err.message);
     } finally {
-      hideOverlay(section);
+      setBusy('sources', false);
       sourcesBusy = false;
     }
-    showDonePopup(failed ? 'Refresh finished with problems' : 'Refresh done', lines);
+    showResult(section, failed ? 'Refresh finished with problems' : 'Refresh done', lines);
   }
 
   function describeList(label, d) {
@@ -226,8 +227,8 @@ const RefreshControls = (() => {
         if (last.tracksRemoved) parts.push(`${last.tracksRemoved.toLocaleString()} removed`);
         return { line: `Local Library: ${parts.join(', ')} (${total} tracks)` };
       }
-      if (s.state === 'enumerating') onProgress('Looking for music files…');
-      else if (s.total) onProgress(`Checking music files… ${Math.round((s.processed / s.total) * 100)}%`);
+      // Short enough for the badge on the button.
+      if (s.total) onProgress(`${Math.round((s.processed / s.total) * 100)}%`);
     }
   }
 
@@ -237,15 +238,17 @@ const RefreshControls = (() => {
 
   // ---------------- Buttons ----------------
 
-  function makeButton(label, onClick) {
+  function makeButton(kind, label, onClick) {
     const btn = document.createElement('button');
     btn.className = 'refreshbtn';
+    btn.dataset.refresh = kind;
     btn.setAttribute('aria-label', label);
-    btn.textContent = '↻';
+    btn.innerHTML = '<span class="refreshbtn__icon">↻</span><span class="refreshbtn__badge"></span>';
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       onClick();
     });
+    applyBusy(btn, kind);
     return btn;
   }
 
@@ -254,16 +257,20 @@ const RefreshControls = (() => {
       onSpeakersDone = options.onSpeakersDone || null;
       onSourcesDone = options.onSourcesDone || null;
       const tabs = document.querySelector('.sourcepanel__tabs');
-      if (tabs) tabs.appendChild(makeButton('Refresh music sources', refreshSources));
+      if (tabs) tabs.appendChild(makeButton('sources', 'Refresh music sources', refreshSources));
+    },
+    // Called once the room list exists: a speaker check that took the page
+    // off demo data reloaded it, and its result is shown now.
+    showPendingResult() {
       let pending = null;
       try {
         pending = JSON.parse(sessionStorage.getItem('refreshDone') || 'null');
         sessionStorage.removeItem('refreshDone');
       } catch (err) { /* private mode or bad JSON */ }
-      if (pending) showDonePopup(pending.title, pending.lines);
+      if (pending) showResult(document.getElementById('sonosRoomlist'), pending.title, pending.lines);
     },
     // The Groups row is rebuilt on every room-list render, so it asks for
-    // a fresh button each time.
-    makeSpeakerButton: () => makeButton('Refresh speakers', refreshSpeakers)
+    // a fresh button each time (it picks up the current busy state).
+    makeSpeakerButton: () => makeButton('speakers', 'Refresh speakers', refreshSpeakers)
   };
 })();

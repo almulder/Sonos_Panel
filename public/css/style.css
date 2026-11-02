@@ -2282,11 +2282,13 @@ button:focus-visible,
    Refresh controls (refreshControls.js)
    One round button at the far right of the room list's "Groups" row
    (speakers) and one beside the Sources/Queue tabs (music sources). While
-   a refresh runs its panel gets a dimmed overlay that swallows taps, so
-   it can't be started twice or used half-updated; a popup in the middle
-   of the screen then says what changed.
+   a refresh runs only the button shows it -- the icon spins, it can't be
+   pressed again, and a library rescan shows its percentage in a badge --
+   so the panel stays usable. The result then appears over that panel
+   with an OK button.
 --------------------------------------------------------------------- */
 .refreshbtn {
+  position: relative;
   width: 34px;
   height: 34px;
   flex: 0 0 34px;
@@ -2301,9 +2303,33 @@ button:focus-visible,
   align-items: center;
   justify-content: center;
 }
-.refreshbtn:active {
+.refreshbtn:active,
+.refreshbtn.is-busy {
   color: var(--accent);
   border-color: var(--accent);
+}
+.refreshbtn__icon {
+  display: inline-block;
+}
+.refreshbtn.is-busy .refreshbtn__icon {
+  animation: refreshspin 0.9s linear infinite;
+}
+.refreshbtn__badge {
+  position: absolute;
+  top: -7px;
+  right: -10px;
+  padding: 1px 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--bg);
+  font-family: var(--font-label);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.4;
+  pointer-events: none;
+}
+@keyframes refreshspin {
+  to { transform: rotate(360deg); }
 }
 /* Pushed to the far right; the row's other children are left-aligned. */
 .roomrow__refresh {
@@ -2319,79 +2345,61 @@ button:focus-visible,
   font-size: 11px;
 }
 
+/* The result card, over the panel it's about until OK is tapped. */
 .roomlist,
 .sourcepanel {
   position: relative;
 }
-.refreshoverlay {
+.refreshresult {
   position: absolute;
   inset: 0;
   z-index: 40;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  background: rgba(20, 23, 26, 0.82);
+  padding: 16px;
+  background: rgba(20, 23, 26, 0.7);
   border-radius: var(--radius);
 }
-.refreshoverlay__spinner {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  border: 3px solid var(--divider);
-  border-top-color: var(--accent);
-  animation: refreshspin 0.9s linear infinite;
-}
-.refreshoverlay__text {
-  margin: 0;
-  padding: 0 16px;
-  font-family: var(--font-label);
-  font-size: 13px;
-  letter-spacing: 0.04em;
-  color: var(--text);
-  text-align: center;
-}
-@keyframes refreshspin {
-  to { transform: rotate(360deg); }
-}
-
-.refreshdone {
-  position: fixed;
-  inset: 0;
-  z-index: 300;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.45);
-}
-.refreshdone__sheet {
-  min-width: 280px;
-  max-width: min(480px, 90vw);
-  padding: 22px 26px;
+.refreshresult__sheet {
+  width: 100%;
+  max-width: 380px;
+  padding: 20px 22px;
   border-radius: var(--radius);
   background: var(--panel-raised);
   border: 1px solid var(--accent-dim);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   text-align: center;
 }
-.refreshdone__title {
+.refreshresult__title {
   margin: 0 0 12px;
   font-family: var(--font-label);
-  font-size: 15px;
+  font-size: 14px;
   letter-spacing: 0.08em;
   color: var(--accent);
   text-transform: uppercase;
 }
-.refreshdone__lines {
+.refreshresult__lines {
   list-style: none;
-  margin: 0;
+  margin: 0 0 18px;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
   font-size: 15px;
   color: var(--text);
+}
+.refreshresult__ok {
+  min-width: 120px;
+  min-height: 44px;
+  border: none;
+  border-radius: 22px;
+  background: var(--accent);
+  color: var(--bg);
+  font-family: var(--font-label);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 /* The Groups row sits in its own list above the scrolling room list
@@ -2402,4 +2410,31 @@ button:focus-visible,
   padding: 0;
   flex: none;
   min-width: 0;
+}
+
+/* Scrollbars on every scrolling list (rooms, sources, queue, dialogs),
+   always visible and in the panel's colours. Chrome on Windows 11 and
+   Android browsers otherwise hide them until hover or a scroll, so a
+   longer list didn't read as scrollable. The ::-webkit-scrollbar rules
+   switch Chrome/WebView to classic, always-shown bars. Deliberately no
+   scrollbar-width/scrollbar-color here: in current Chrome those override
+   (and so would cancel) the styling below. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--panel);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--accent-dim);
+  border-radius: 4px;
+  border: 1px solid var(--panel);
+}
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }

@@ -135,6 +135,7 @@
     });
 
     await SonosView.init();
+    RefreshControls.showPendingResult();
     connectSocket();
     Screensaver.init(config.screensaverTimeoutMs);
   }
