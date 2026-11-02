@@ -171,15 +171,17 @@ PoE panel whose CPU is ~13x slower than a laptop):
 - **Refresh speakers without restarting**: a refresh button at the far
   right of the room list's Groups row re-checks which speakers are in
   your Sonos system. Speakers added since the panel started appear,
-  removed ones drop out, and a popup lists what changed. If the panel
-  started while it couldn't find any speakers (showing demo rooms), the
-  button finds them
+  ones that stop answering are listed as not responding (and dropped if
+  they're still missing on the next refresh). If the panel started while
+  it couldn't find any speakers (showing demo rooms), the button finds them
 - **Refresh music sources without restarting**: a refresh button beside
   Sources / Queue re-reads your Sonos Favorites and Playlists and, if a
-  Local Library is set up, rescans its folder. The popup says how many
-  favorites, playlists and tracks were added or removed. Each panel is
-  covered while its refresh runs (with scan progress for the library),
-  so it can't be started twice
+  Local Library is set up, rescans its folder, with how many favorites,
+  playlists and tracks were added or removed.
+- While a refresh runs, its button spins (with the scan's percentage for a
+  library rescan) and can't be pressed again; everything else keeps
+  working. The result then appears over that panel until you tap OK, and
+  each check is written to the log
 - **Album art glows in its own colours**: a blurred copy of the cover
   glows around it, edge by edge, and the background takes on the cover's
   colour -- the whole screen in full-screen view and on the now-playing
