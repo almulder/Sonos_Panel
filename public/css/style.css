@@ -1524,10 +1524,38 @@ button {
   gap: 10px;
   text-align: center;
   width: 320px;
-  /* top/left set by JS each animation frame */
+  /* Moved by a transform set by JS each animation frame; own layer, and
+     its own stacking context for the art glow below. */
+  left: 0;
+  top: 0;
+  will-change: transform;
+  isolation: isolate;
 }
 .screensaver.is-bouncing .screensaver__bounce {
   display: flex;
+}
+/* Same look as the full-screen now-playing view: the background takes a
+   dark shade of the cover's colour (--art-bg, set on .app by sonosView.js
+   for the focused room -- the one the screensaver shows), and the cover
+   glows with a blurred copy of itself. Static apart from the bounce. */
+.screensaver.is-bouncing {
+  background: radial-gradient(120% 120% at 50% 50%, var(--art-bg, #000) 0%, #000 80%);
+}
+.screensaver__art {
+  position: relative;
+}
+.screensaver__art::before {
+  content: '';
+  position: absolute;
+  inset: -14%;
+  z-index: -1;
+  border-radius: 18px;
+  background-image: inherit;
+  background-size: cover;
+  background-position: center;
+  filter: blur(18px) saturate(1.6);
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 .screensaver__art {
@@ -2364,4 +2392,14 @@ button:focus-visible,
   gap: 6px;
   font-size: 15px;
   color: var(--text);
+}
+
+/* The Groups row sits in its own list above the scrolling room list
+   (sonosView.js renders it there), so it stays put while rooms scroll. */
+.roomlist__pinned {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: none;
+  min-width: 0;
 }

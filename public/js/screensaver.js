@@ -96,8 +96,9 @@ const Screensaver = (() => {
       y = Math.max(0, Math.min(y, maxY));
     }
 
-    bounceEl.style.left = `${x}px`;
-    bounceEl.style.top = `${y}px`;
+    // A transform, not left/top: it moves the already-painted block (art
+    // glow included) on the GPU instead of re-laying-out every frame.
+    bounceEl.style.transform = `translate(${x}px, ${y}px)`;
 
     rafId = requestAnimationFrame(bounceTick);
   }

@@ -177,6 +177,9 @@ function buildSourceIcon(group) {
 
 const SonosView = (() => {
   const roomListEl = document.getElementById('roomList');
+  // Holds the Groups row (and its refresh button) above the scrolling list,
+  // so it stays put while the rooms scroll.
+  const roomListPinnedEl = document.getElementById('roomListPinned');
   const roomlistPullIndicator = document.getElementById('roomlistPullIndicator');
   const sourceSearchWrap = document.getElementById('sourceSearchWrap');
   const sourceSearchInput = document.getElementById('sourceSearchInput');
@@ -317,9 +320,11 @@ const SonosView = (() => {
     // far edge, with a large empty gap in between on wide screens).
     const widest = rooms.reduce((max, r) => Math.max(max, measureTextWidth(r.name, '16px Inter, system-ui, sans-serif')), 0);
     roomListEl.style.setProperty('--name-col-width', `${Math.ceil(widest) + 28}px`);
+    roomListPinnedEl.style.setProperty('--name-col-width', `${Math.ceil(widest) + 28}px`);
 
+    roomListPinnedEl.innerHTML = '';
+    roomListPinnedEl.appendChild(buildGroupsEntryRow());
     roomListEl.innerHTML = '';
-    roomListEl.appendChild(buildGroupsEntryRow());
     getTopLevelRooms().forEach((room) => {
       const members = getMembersOf(room.name);
       roomListEl.appendChild(buildCoordinatorRow(room, members));
@@ -684,6 +689,7 @@ const SonosView = (() => {
     roomlistLabel.textContent = 'Saved Groups';
     roomlistBackBtn.style.display = '';
     savedGroupsAddBtn.style.display = '';
+    roomListPinnedEl.innerHTML = '';
     roomListEl.innerHTML = '';
 
     if (savedGroupsCache.length === 0) {
