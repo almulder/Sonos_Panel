@@ -123,6 +123,16 @@ const Tabs = (() => {
 
     colorMap.sonos = sonosColor;
 
+    // No extra tabs: a bar holding only Sonos is just wasted height, so
+    // hide it (via a class on .app -- see the tab bar CSS) and let the
+    // Sonos view and volume rail take the full screen.
+    if (!tabs || tabs.length === 0) {
+      const appEl = tabBarEl.closest('.app');
+      if (appEl) appEl.classList.add('app--single-tab');
+      activate('sonos');
+      return;
+    }
+
     // Slot 1 is always Sonos -- it's the pre-built #view-sonos section
     // already in index.html.
     tabBarEl.appendChild(makeTabButton({

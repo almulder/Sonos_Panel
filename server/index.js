@@ -230,6 +230,23 @@ app.get('/api/sonos/rooms', asyncHandler(async (req, res) => {
   res.json({ rooms, mock: sonos.isMock() });
 }));
 
+// The refresh button on the room list: re-check which speakers are in the
+// household (added / removed since startup) without restarting the
+// container, then poll everyone and push the new room list to all
+// screens.
+app.post('/api/sonos/rescan-speakers', asyncHandler(async (req, res) => {
+  const result = await sonos.rescanSpeakers();
+  const rooms = await sonos.getRooms();
+  if (broadcastNow) broadcastNow();
+  res.json({ ...result, rooms, mock: sonos.isMock() });
+}));
+
+// The refresh button on the Sources panel: fresh favorites and playlists
+// (the Local Library rescan is its own route, /api/local/rescan).
+app.post('/api/sonos/refresh-sources', asyncHandler(async (req, res) => {
+  res.json(await sonos.refreshMusicSources());
+}));
+
 app.get('/api/sonos/nowplaying/:room', asyncHandler(async (req, res) => {
   const track = await sonos.getNowPlayingShared(req.params.room);
   res.json(track);

@@ -330,6 +330,126 @@ async function init() {
   }
 }
 
+// ---- Re-check speakers without a restart (the panel's refresh button) ----
+// Any known speaker's topology lists every member of the household, so a
+// speaker added in the Sonos app shows up here without SSDP, and one
+// removed from the household drops out. Known speakers whose address
+// moved are healed the same way the polls do. A server that came up with
+// no speakers found (running on demo data -- seen once on a laptop when
+// SSDP answered nothing at boot) runs the full startup discovery again.
+// One run at a time: a second tap, or another screen, shares it.
+let rescanInFlight = null;
+function rescanSpeakers() {
+  if (!rescanInFlight) rescanInFlight = doRescanSpeakers().finally(() => { rescanInFlight = null; });
+  return rescanInFlight;
+}
+
+async function doRescanSpeakers() {
+  if (usingMock) {
+    await init();
+    if (usingMock) return { ok: false, error: 'No Sonos speakers answered on the network', added: [], removed: [], total: 0 };
+    debugLog.info('sonos', `Speaker re-check: left demo data, found ${devicesByName.size} speaker(s)`);
+    return { ok: true, added: [...displayNameByKey.values()].sort(), removed: [], total: devicesByName.size, leftDemo: true };
+  }
+  let groups = null;
+  for (const device of devicesByName.values()) {
+    try {
+      groups = await withTimeout(device.getAllGroups(), DEVICE_CALL_TIMEOUT_MS, 'getAllGroups');
+      break;
+    } catch (err) {
+      // try the next one -- one unplugged speaker mustn't fail the check
+    }
+  }
+  if (!groups) return { ok: false, error: 'None of the known speakers answered', added: [], removed: [], total: devicesByName.size };
+
+  const members = new Map(); // key -> ZoneGroupMember, first one wins (same as init)
+  for (const zone of groups) {
+    for (const m of zone.ZoneGroupMember) {
+      const key = m.ZoneName.toLowerCase();
+      if (!members.has(key)) members.set(key, m);
+    }
+  }
+  const added = [];
+  const removed = [];
+  for (const [key, member] of members) {
+    if (devicesByName.has(key)) {
+      healDeviceAddressIfChanged(member);
+      continue;
+    }
+    try {
+      const uri = new URL(member.Location);
+      const device = new Sonos(uri.hostname, parseInt(uri.port, 10));
+      devicesByName.set(key, device);
+      displayNameByKey.set(key, member.ZoneName);
+      attachDeviceEventListeners(member.ZoneName, device);
+      added.push(member.ZoneName);
+    } catch (err) {
+      debugLog.warn('sonos', `Speaker re-check: could not add ${member.ZoneName}: ${err.message}`);
+    }
+  }
+  for (const [key, device] of [...devicesByName]) {
+    if (members.has(key)) continue;
+    const name = displayNameByKey.get(key) || key;
+    devicesByName.delete(key);
+    displayNameByKey.delete(key);
+    lastRoomsByName.delete(name);
+    await dropDeviceSubscriptions(device, name);
+    removed.push(name);
+  }
+  if (added.length || removed.length) {
+    debugLog.info('sonos', `Speaker re-check: added ${added.join(', ') || 'none'}; removed ${removed.join(', ') || 'none'}; ${devicesByName.size} total`);
+  }
+  return { ok: true, added: added.sort(), removed: removed.sort(), total: devicesByName.size };
+}
+
+// A speaker gone from the household: stop renewing its subscriptions and
+// cancel them (best effort -- it's probably unplugged). The listener
+// parses topology events with its first entry's device, so the list is
+// never emptied here.
+async function dropDeviceSubscriptions(device, name) {
+  const subs = Listener._deviceSubscriptions;
+  if (!Array.isArray(subs)) return;
+  const i = subs.findIndex((s) => s.device === device);
+  if (i < 0) return;
+  const sub = subs[i];
+  if (sub._renewTimer) clearInterval(sub._renewTimer);
+  await Promise.allSettled(Object.keys(sub.subscriptions || {}).map((sid) =>
+    withTimeout(sub.cancelSubscription(sid), DEVICE_CALL_TIMEOUT_MS, `unsubscribe ${sid} (${name})`)));
+  if (subs.length > 1) subs.splice(subs.indexOf(sub), 1);
+}
+
+// Sources refresh button: drop every cached browse list (favorites,
+// playlists, their tracks, service browses) and read favorites and
+// playlists fresh, so a favorite or playlist added in the Sonos app
+// shows without waiting for the caches to age out.
+// Each list comes back as { total, added, removed } against what the
+// panel had cached before (added/removed are null when nothing was
+// cached yet, so there's nothing to compare with).
+async function refreshMusicSources() {
+  if (usingMock) return { favorites: { total: 0, added: null, removed: null }, playlists: { total: 0, added: null, removed: null } };
+  const roomName = displayNameByKey.values().next().value;
+  const favoritesBefore = favoritesCache.items;
+  const playlistsBefore = playlistsCache.items;
+  invalidateContainerCache('');
+  invalidatePlaylistsCache();
+  if (!favoritesCache.refreshing) favoritesCache = { items: null, at: 0, refreshing: false };
+  const [favorites, playlists] = await Promise.all([refreshFavoritesCache(roomName), refreshPlaylistsCache(roomName)]);
+  return { favorites: listDiff(favoritesBefore, favorites), playlists: listDiff(playlistsBefore, playlists) };
+}
+
+function listDiff(before, after) {
+  // By id (FV:2/12, SQ:3), so renaming a playlist isn't "1 added, 1 removed".
+  const key = (item) => item.id || item.uri || item.title;
+  if (!Array.isArray(before)) return { total: after.length, added: null, removed: null };
+  const was = new Set(before.map(key));
+  const now = new Set(after.map(key));
+  return {
+    total: after.length,
+    added: [...now].filter((k) => !was.has(k)).length,
+    removed: [...was].filter((k) => !now.has(k)).length
+  };
+}
+
 function findDevice(roomName) {
   return devicesByName.get((roomName || '').toLowerCase()) || null;
 }
@@ -3901,6 +4021,8 @@ function isMock() {
 }
 
 module.exports = {
+  rescanSpeakers,
+  refreshMusicSources,
   init,
   getDeviceHosts,
   getWarmArtUrls,

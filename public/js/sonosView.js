@@ -671,6 +671,12 @@ const SonosView = (() => {
     nameLine.appendChild(chevron);
     main.appendChild(nameLine);
     li.appendChild(main);
+    // Far right of this row: re-check which speakers are in the system.
+    if (typeof RefreshControls !== 'undefined') {
+      const refreshBtn = RefreshControls.makeSpeakerButton();
+      refreshBtn.classList.add('roomrow__refresh');
+      li.appendChild(refreshBtn);
+    }
     return li;
   }
 
@@ -1231,7 +1237,9 @@ const SonosView = (() => {
       artEl.style.backgroundSize = 'cover';
       artEl.style.backgroundRepeat = '';
       artEl.style.backgroundPosition = '';
+      updateArtGlow(track.albumArtUrl);
     } else if (track && track.playing && track.sourceService) {
+      updateArtGlow(null);
       // No song cover and no station artwork: show the service's own icon
       // (centered, not cropped) rather than an empty square.
       artEl.style.backgroundImage = `url("icons/${iconFilenameForService(track.sourceService)}.png"), url("icons/default.png")`;
@@ -1240,12 +1248,103 @@ const SonosView = (() => {
       artEl.style.backgroundPosition = 'center';
     } else {
       artEl.style.backgroundImage = '';
+      updateArtGlow(null);
     }
 
     progress.update(track ? track.position : 0, track ? track.duration : 0, currentlyPlaying);
 
     updateShuffleCrossfadeUI(track);
     updateSleepTimerBadge(track ? track.sleepTimerRemainingSeconds : 0);
+  }
+
+  // Fullscreen art glow: one colour sampled from the cover, exposed as
+  // --art-glow on #sonosArt (the CSS only uses it in the stage layout).
+  // Results are cached per URL so a re-render of the same track (state
+  // polls arrive constantly) costs nothing; only a new URL decodes an image.
+  const artGlowCache = new Map();
+  let artGlowUrl = null;
+
+  function updateArtGlow(url) {
+    if (url === artGlowUrl) return;
+    artGlowUrl = url;
+    if (!url) { artEl.style.removeProperty('--art-glow'); return; }
+    if (artGlowCache.has(url)) { applyArtGlow(artGlowCache.get(url)); return; }
+    const img = new Image();
+    let crossOrigin = false;
+    try { crossOrigin = new URL(url, location.href).origin !== location.origin; } catch (_) {}
+    // Only ask for CORS on foreign hosts: on our own /api/art and /art
+    // routes it is unnecessary, and many internet art hosts send no CORS
+    // headers, in which case the load fails and we simply get no glow.
+    if (crossOrigin) img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const color = sampleArtColor(img);
+      artGlowCache.set(url, color);
+      // The track may have changed while this image was loading.
+      if (artGlowUrl === url) applyArtGlow(color);
+    };
+    img.onerror = () => {
+      artGlowCache.set(url, null);
+      if (artGlowUrl === url) applyArtGlow(null);
+    };
+    img.src = url;
+  }
+
+  function applyArtGlow(color) {
+    if (color) artEl.style.setProperty('--art-glow', color);
+    else artEl.style.removeProperty('--art-glow');
+  }
+
+  // Downsample to 20x20 and average the reasonably saturated, not-too-dark /
+  // not-too-light pixels (the "colour" of the cover rather than its black or
+  // white background); fall back to the plain average for greyscale covers.
+  // Then lift saturation and lightness so even a dark cover glows on the
+  // dark theme. Returns an hsla() string, or null if the canvas is tainted.
+  function sampleArtColor(img) {
+    const SIZE = 20;
+    let data;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, SIZE, SIZE);
+      data = ctx.getImageData(0, 0, SIZE, SIZE).data;
+    } catch (_) {
+      return null; // cross-origin art without CORS taints the canvas
+    }
+    let vr = 0, vg = 0, vb = 0, vn = 0, ar = 0, ag = 0, ab = 0, an = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 128) continue;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      ar += r; ag += g; ab += b; an++;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      if (max > 40 && max < 245 && (max - min) / max > 0.3) {
+        vr += r; vg += g; vb += b; vn++;
+      }
+    }
+    if (!an) return null;
+    // Require a handful of vivid pixels so a few stray ones don't decide it.
+    const useVivid = vn >= an * 0.08;
+    const n = useVivid ? vn : an;
+    const [h, s, l] = rgbToHsl(
+      (useVivid ? vr : ar) / n, (useVivid ? vg : ag) / n, (useVivid ? vb : ab) / n);
+    const sat = s < 0.08 ? s : Math.min(1, s * 1.4 + 0.15);
+    const light = Math.min(0.65, Math.max(0.5, l));
+    return `hsla(${Math.round(h * 360)}, ${Math.round(sat * 100)}%, ${Math.round(light * 100)}%, 0.8)`;
+  }
+
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    if (max === min) return [0, 0, l];
+    const d = max - min;
+    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    let h;
+    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    return [h / 6, s, l];
   }
 
   function updateShuffleCrossfadeUI(track) {
@@ -2618,6 +2717,10 @@ const SonosView = (() => {
         if (room !== focusedRoom && !(focused && focused.coordinator === room)) return;
       }
       await syncVolumeRailToFocusedRoom();
+    },
+    // After the Sources refresh: back to the top-level list, freshly read.
+    reloadSources() {
+      return openSourceGroups();
     },
     getFocusedRoom() {
       return focusedRoom;

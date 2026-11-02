@@ -132,6 +132,12 @@ button {
   opacity: 1;
 }
 
+/* No extra tabs configured (tabs.js adds this class): drop the bar so
+   .body (flex: 1) takes its height and the volume rail runs full-screen. */
+.app--single-tab .tabbar {
+  display: none;
+}
+
 /* ---------------------------------------------------------------------
    Body layout: content + persistent volume rail
 --------------------------------------------------------------------- */
@@ -820,6 +826,15 @@ button {
 .sonostop--stage .nowplaying__art {
   width: min(46vh, 420px);
   height: min(46vh, 420px);
+  /* Soft glow in the cover's own colour (--art-glow is set per track by
+     sonosView.js; unset = no art or unreadable art = transparent, no glow).
+     A box-shadow takes no layout space and never intercepts taps, and the
+     modest spread keeps it from washing over the title/transport below.
+     Transitioned once per song change -- no ongoing animation. */
+  box-shadow: 0 0 40px 6px var(--art-glow, transparent),
+              0 0 110px 26px var(--art-glow, transparent),
+              0 8px 24px rgba(0, 0, 0, 0.45);
+  transition: box-shadow 0.8s ease;
 }
 
 .sonostop--stage .nowplaying__body {
@@ -2192,4 +2207,120 @@ button:focus-visible,
   font-weight: 600;
   text-align: center;
   cursor: pointer;
+}
+
+/* ---------------------------------------------------------------------
+   Refresh controls (refreshControls.js)
+   One round button at the far right of the room list's "Groups" row
+   (speakers) and one beside the Sources/Queue tabs (music sources). While
+   a refresh runs its panel gets a dimmed overlay that swallows taps, so
+   it can't be started twice or used half-updated; a popup in the middle
+   of the screen then says what changed.
+--------------------------------------------------------------------- */
+.refreshbtn {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 50%;
+  border: 1px solid var(--divider);
+  background: var(--panel-raised);
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.refreshbtn:active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* Pushed to the far right; the row's other children are left-aligned. */
+.roomrow__refresh {
+  margin-left: auto;
+}
+
+/* Sources/Queue made a little smaller to give the refresh button room. */
+.sourcepanel__tabs {
+  align-items: center;
+}
+.sourcepanel__tab {
+  padding: 5px 0;
+  font-size: 11px;
+}
+
+.roomlist,
+.sourcepanel {
+  position: relative;
+}
+.refreshoverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: rgba(20, 23, 26, 0.82);
+  border-radius: var(--radius);
+}
+.refreshoverlay__spinner {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 3px solid var(--divider);
+  border-top-color: var(--accent);
+  animation: refreshspin 0.9s linear infinite;
+}
+.refreshoverlay__text {
+  margin: 0;
+  padding: 0 16px;
+  font-family: var(--font-label);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  text-align: center;
+}
+@keyframes refreshspin {
+  to { transform: rotate(360deg); }
+}
+
+.refreshdone {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.refreshdone__sheet {
+  min-width: 280px;
+  max-width: min(480px, 90vw);
+  padding: 22px 26px;
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  border: 1px solid var(--accent-dim);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  text-align: center;
+}
+.refreshdone__title {
+  margin: 0 0 12px;
+  font-family: var(--font-label);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+.refreshdone__lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 15px;
+  color: var(--text);
 }

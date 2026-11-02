@@ -711,6 +711,7 @@ async function runScan() {
   // eslint-disable-next-line global-require
   const mm = require('music-metadata');
   const generation = Date.now();
+  const tracksBefore = stmts.countTracks.get().c;
 
   // Fresh look at folder images every scan (see clearFolderArtCache).
   localLibrary.clearFolderArtCache();
@@ -746,7 +747,13 @@ async function runScan() {
   const artPass = await resolveArtPass(mm);
   writeIncompatibleFile();
 
+  // Tracks are rows keyed by file, so new files are whatever the count
+  // grew by once the removed ones are put back. The panel's refresh
+  // button reports these two.
+  const tracksAfter = stmts.countTracks.get().c;
   scanState.lastScan = {
+    tracksAdded: Math.max(0, tracksAfter - tracksBefore + removedTracks),
+    tracksRemoved: removedTracks,
     finishedAt: new Date().toISOString(),
     reason: scanState.reason,
     durationSeconds: Math.round((Date.now() - startedMs) / 1000),

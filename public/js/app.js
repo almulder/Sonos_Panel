@@ -129,6 +129,10 @@
     const config = await AppConfig.load();
     Theme.apply(config.color);
     Tabs.init(config.tabs, config.color);
+    RefreshControls.init({
+      onSpeakersDone: (rooms) => SonosView.refreshFromSocket(rooms),
+      onSourcesDone: () => SonosView.reloadSources()
+    });
 
     await SonosView.init();
     connectSocket();
