@@ -166,30 +166,43 @@ PoE panel whose CPU is ~13x slower than a laptop):
   that was rebooted) falls back to asking the speaker the old way, and
   a full check runs every 90 seconds anyway
 
-### Updated: v0.19.0-dev - Nov 01, 2026 (developer build, `:dev` image)
+### Updated: v0.19.0 - Nov 01, 2026
 
 - **Refresh speakers without restarting**: a refresh button at the far
   right of the room list's Groups row re-checks which speakers are in
-  your Sonos system. Speakers added since the panel started appear,
-  ones that stop answering are listed as not responding (and dropped if
-  they're still missing on the next refresh). If the panel started while
+  your Sonos system (it asks a speaker for the system's member list, so
+  it's almost instant). Speakers added since the panel started appear;
+  ones that stop answering are listed as not responding, and dropped if
+  they're still missing on the next refresh. If the panel started while
   it couldn't find any speakers (showing demo rooms), the button finds them
 - **Refresh music sources without restarting**: a refresh button beside
   Sources / Queue re-reads your Sonos Favorites and Playlists and, if a
-  Local Library is set up, rescans its folder, with how many favorites,
-  playlists and tracks were added or removed.
-- While a refresh runs, its button spins (with the scan's percentage for a
-  library rescan) and can't be pressed again; everything else keeps
-  working. The result then appears over that panel until you tap OK, and
-  each check is written to the log
+  Local Library is set up, rescans its folder, then says how many
+  favorites, playlists and tracks were added or removed
+- **Refreshes don't get in the way**: while one runs, only its button
+  shows it -- it spins (with the scan's percentage for a library rescan)
+  and can't be pressed again, and everything else keeps working. The
+  result appears over that panel until you tap OK, and each check is
+  written to the container log ("Speaker re-check ...", "Music sources
+  refresh ...")
 - **Album art glows in its own colours**: a blurred copy of the cover
   glows around it, edge by edge, and the background takes on the cover's
   colour -- the whole screen in full-screen view and on the now-playing
   screensaver, and the now-playing card on the main screen
 - **No empty tab bar**: with no extra tabs configured, the tab bar is
   hidden and the Sonos screen and volume slider use the full height
+  (pull-to-refresh then arms only from the very top edge)
 - **Room list header stays put**: the Groups row (with the speaker
   refresh button) no longer scrolls away with the rooms
+- **Scrollbars you can see**: every scrolling list shows a thin scrollbar
+  in the panel's colours, so longer lists read as scrollable (Chrome on
+  Windows 11 and Android hid them until you scrolled)
+- **Smoother screensaver**: the bouncing now-playing block moves on the
+  GPU, so it stays smooth with the new glow on lower-powered tablets
+- **Developer builds**: work in progress is published as a separate
+  `:dev` image from the `develop` branch (see
+  [Running on Unraid](#running-on-unraid-recommended)); `:latest` only
+  changes with releases like this one
 
 ## Bug fixes
 
