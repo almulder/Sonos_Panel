@@ -1261,8 +1261,9 @@ const SonosView = (() => {
     updateSleepTimerBadge(track ? track.sleepTimerRemainingSeconds : 0);
   }
 
-  // Fullscreen art glow: one colour sampled from the cover, exposed as
-  // --art-glow on #sonosArt (the CSS only uses it in the stage layout).
+  // Fullscreen art glow: the glow itself is a blurred copy of the cover
+  // (pure CSS); this samples one colour from the cover for the tinted
+  // full-screen background, exposed as --art-bg on .app.
   // Results are cached per URL so a re-render of the same track (state
   // polls arrive constantly) costs nothing; only a new URL decodes an image.
   // Capped (oldest out first): radio with per-track art would otherwise grow
@@ -1312,20 +1313,16 @@ const SonosView = (() => {
   // On .app rather than the art: the full-screen background uses it too.
   const appRootEl = document.querySelector('.app');
   function applyArtGlow(color) {
-    if (color) {
-      appRootEl.style.setProperty('--art-glow', color.glow);
-      appRootEl.style.setProperty('--art-bg', color.bg);
-    } else {
-      appRootEl.style.removeProperty('--art-glow');
-      appRootEl.style.removeProperty('--art-bg');
-    }
+    if (color) appRootEl.style.setProperty('--art-bg', color);
+    else appRootEl.style.removeProperty('--art-bg');
   }
 
   // Downsample to 20x20 and average the reasonably saturated, not-too-dark /
   // not-too-light pixels (the "colour" of the cover rather than its black or
   // white background); fall back to the plain average for greyscale covers.
-  // Then lift saturation and lightness so even a dark cover glows on the
-  // dark theme. Returns { glow, bg } colour strings, or null if the canvas is tainted.
+  // Saturation is lifted so even a muted cover tints the background, and the
+  // lightness fixed dark enough for white text on top. Returns an hsl()
+  // string, or null if the canvas is tainted.
   function sampleArtColor(img) {
     const SIZE = 20;
     let data;
@@ -1353,17 +1350,10 @@ const SonosView = (() => {
     // Require a handful of vivid pixels so a few stray ones don't decide it.
     const useVivid = vn >= an * 0.08;
     const n = useVivid ? vn : an;
-    const [h, s, l] = rgbToHsl(
+    const [h, s] = rgbToHsl(
       (useVivid ? vr : ar) / n, (useVivid ? vg : ag) / n, (useVivid ? vb : ab) / n);
-    const sat = s < 0.08 ? s : Math.min(1, s * 1.4 + 0.15);
-    const light = Math.min(0.65, Math.max(0.5, l));
-    const hue = Math.round(h * 360);
-    return {
-      glow: `hsla(${hue}, ${Math.round(sat * 100)}%, ${Math.round(light * 100)}%, 0.8)`,
-      // The full-screen background: same hue, dark enough that white text
-      // on top stays readable.
-      bg: `hsl(${hue}, ${Math.round(Math.min(sat, 0.6) * 100)}%, 22%)`
-    };
+    const sat = s < 0.08 ? s : Math.min(0.6, s * 1.4 + 0.15);
+    return `hsl(${Math.round(h * 360)}, ${Math.round(sat * 100)}%, 22%)`;
   }
 
   function rgbToHsl(r, g, b) {

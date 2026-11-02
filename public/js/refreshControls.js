@@ -211,7 +211,9 @@ const RefreshControls = (() => {
         const last = s.lastScan;
         const finishedNew = last && last.finishedAt !== previousFinish;
         if (!finishedNew) {
-          if (sawRunning && s.lastError) return { line: `Local Library: scan failed (${s.lastError})`, error: true };
+          // Starting a scan clears lastError, so after our 200 any error is
+          // this scan's -- even one that failed before the first poll.
+          if ((sawRunning || start.status === 200) && s.lastError) return { line: `Local Library: scan failed (${s.lastError})`, error: true };
           if (!sawRunning && Date.now() - startedWaiting > SCAN_START_WAIT_MS) {
             return { line: 'Local Library: the scan did not start', error: true };
           }
