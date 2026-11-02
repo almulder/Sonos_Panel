@@ -142,9 +142,13 @@ const RefreshControls = (() => {
     const lines = [];
     let failed = false;
     try {
+      // The Favorites request's failure is caught here rather than
+      // rejecting Promise.all: otherwise the refresh would finish while the
+      // library poll carried on, and its progress would put the button back
+      // into a busy state nothing then clears.
       const [sonosResult, libraryResult] = await Promise.all([
-        postJson('/api/sonos/refresh-sources'),
-        rescanLibrary((badge) => setBusy('sources', true, badge))
+        postJson('/api/sonos/refresh-sources').catch((err) => ({ status: 0, body: { error: err.message } })),
+        rescanLibrary((badge) => { if (sourcesBusy) setBusy('sources', true, badge); })
       ]);
       if (sonosResult.status === 200) {
         lines.push(describeList('Favorites', sonosResult.body.favorites));

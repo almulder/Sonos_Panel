@@ -421,7 +421,7 @@ async function doRescanSpeakers() {
     removed.push(name);
   }
   if (added.length || removed.length || notResponding.length) {
-    debugLog.info('sonos', `Speaker re-check: added ${added.join(', ') || 'none'}; not responding ${notResponding.join(', ') || 'none'}; removed ${removed.join(', ') || 'none'}; ${devicesByName.size} total`);
+    debugLog.info('sonos', `Speaker re-check done: added ${added.join(', ') || 'none'}; not responding ${notResponding.join(', ') || 'none'}; removed ${removed.join(', ') || 'none'}; ${devicesByName.size} total`);
   } else {
     debugLog.info('sonos', `Speaker re-check done: no changes, ${devicesByName.size} speaker(s)`);
   }
@@ -471,8 +471,12 @@ async function doRefreshMusicSources() {
   invalidateContainerCache('');
   invalidatePlaylistsCache();
   if (!favoritesCache.refreshing) favoritesCache = { items: null, at: 0, refreshing: false };
+  debugLog.info('sonos', 'Music sources refresh requested (Favorites and Playlists)');
   const [favorites, playlists] = await Promise.all([refreshFavoritesCache(roomName), refreshPlaylistsCache(roomName)]);
-  return { favorites: listDiff(favoritesBefore, favorites), playlists: listDiff(playlistsBefore, playlists) };
+  const result = { favorites: listDiff(favoritesBefore, favorites), playlists: listDiff(playlistsBefore, playlists) };
+  const say = (d) => (d.added === null ? `${d.total}` : `${d.total} (+${d.added} / -${d.removed})`);
+  debugLog.info('sonos', `Music sources refresh done: Favorites ${say(result.favorites)}, Playlists ${say(result.playlists)}`);
+  return result;
 }
 
 function listDiff(before, after) {

@@ -2062,12 +2062,9 @@ button:focus-visible,
   line-height: 1;
 }
 
-/* Sleep list: visible thin scrollbar so small screens read as scrollable */
-.sleepmenu__list {
-  scrollbar-width: thin;
-}
-.sleepmenu__list::-webkit-scrollbar { width: 6px; }
-.sleepmenu__list::-webkit-scrollbar-thumb { background: var(--divider); border-radius: 3px; }
+/* Sleep list: its scrollbar comes from the themed global rules at the end
+   of this file (no scrollbar-width here -- in current Chrome that would
+   switch off the ::-webkit-scrollbar styling). */
 
 /* Disconnected rooms: grouping is pointless until they're back */
 .roomrow__groupbtn:disabled { cursor: default; }
