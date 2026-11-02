@@ -14,9 +14,16 @@
   let startY = null;
   let pulled = 0;
 
+  // With no tab bar (no extra tabs configured) that strip is the top of
+  // the now-playing card and the volume rail instead: only the very top
+  // edge arms, and never on a control.
+  const SINGLE_TAB_ARM_ZONE_PX = 20;
+
   document.addEventListener('touchstart', (e) => {
     const t = e.touches[0];
-    if (t && t.clientY <= ARM_ZONE_PX) {
+    const singleTab = !!document.querySelector('.app--single-tab');
+    if (singleTab && e.target.closest && e.target.closest('button, input, .volrail')) return;
+    if (t && t.clientY <= (singleTab ? SINGLE_TAB_ARM_ZONE_PX : ARM_ZONE_PX)) {
       armed = true;
       startY = t.clientY;
       pulled = 0;

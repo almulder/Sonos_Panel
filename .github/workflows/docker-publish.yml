@@ -2,7 +2,9 @@ name: Build and publish Docker image
 
 on:
   push:
-    branches: [main]
+    # develop builds the :dev tag only (see the tags below), so testers
+    # can try work in progress without moving :latest under everyone else.
+    branches: [main, develop]
     tags: ['v*']
   workflow_dispatch: {}
 
@@ -39,6 +41,7 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/develop' }}
             type=ref,event=tag
             type=sha,prefix=
 

@@ -826,15 +826,43 @@ button {
 .sonostop--stage .nowplaying__art {
   width: min(46vh, 420px);
   height: min(46vh, 420px);
-  /* Soft glow in the cover's own colour (--art-glow is set per track by
-     sonosView.js; unset = no art or unreadable art = transparent, no glow).
-     A box-shadow takes no layout space and never intercepts taps, and the
-     modest spread keeps it from washing over the title/transport below.
-     Transitioned once per song change -- no ongoing animation. */
-  box-shadow: 0 0 40px 6px var(--art-glow, transparent),
-              0 0 110px 26px var(--art-glow, transparent),
-              0 8px 24px rgba(0, 0, 0, 0.45);
-  transition: box-shadow 0.8s ease;
+  position: relative;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+/* The glow, Pandora-style: a larger, heavily blurred copy of the cover
+   itself sits behind it, so each edge glows in that part of the cover's
+   colours. background-image inherits the cover set inline by sonosView.js
+   (the service-icon fallback is excluded via :not -- see
+   .nowplaying__art--icon). Its own compositing layer, so the progress bar
+   ticking underneath doesn't re-blur it; nothing animates continuously. */
+.sonostop--stage .nowplaying__art:not(.nowplaying__art--icon)::before {
+  content: '';
+  position: absolute;
+  inset: -14%;
+  z-index: -1;
+  border-radius: 24px;
+  background-image: inherit;
+  background-size: cover;
+  background-position: center;
+  filter: blur(42px) saturate(1.5);
+  opacity: 0.85;
+  transform: translateZ(0);
+  will-change: transform;
+  pointer-events: none;
+}
+/* ...and the whole full-screen background takes on the cover's colour
+   (--art-bg is a dark shade of it, set on .app by sonosView.js; unset =
+   the normal background). */
+/* Own stacking context, so the blurred copy (z-index -1) sits just behind
+   the cover instead of falling behind .app's tinted background below. */
+.sonostop--stage .nowplaying {
+  isolation: isolate;
+}
+.app.is-fullscreen {
+  background: radial-gradient(130% 100% at 50% 22%, var(--art-bg, var(--bg)) 0%, var(--bg) 78%);
+}
+.app.is-fullscreen .volrail {
+  background: rgba(20, 23, 26, 0.55);
 }
 
 .sonostop--stage .nowplaying__body {

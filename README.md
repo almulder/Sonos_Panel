@@ -166,6 +166,25 @@ PoE panel whose CPU is ~13x slower than a laptop):
   that was rebooted) falls back to asking the speaker the old way, and
   a full check runs every 90 seconds anyway
 
+### Updated: v0.19.0-dev - Nov 01, 2026 (developer build, `:dev` image)
+
+- **Refresh speakers without restarting**: a refresh button at the far
+  right of the room list's Groups row re-checks which speakers are in
+  your Sonos system. Speakers added since the panel started appear,
+  removed ones drop out, and a popup lists what changed. If the panel
+  started while it couldn't find any speakers (showing demo rooms), the
+  button finds them
+- **Refresh music sources without restarting**: a refresh button beside
+  Sources / Queue re-reads your Sonos Favorites and Playlists and, if a
+  Local Library is set up, rescans its folder. The popup says how many
+  favorites, playlists and tracks were added or removed. Each panel is
+  covered while its refresh runs (with scan progress for the library),
+  so it can't be started twice
+- **Album art glows in full screen**: the full-screen now-playing view
+  puts a soft glow around the cover in the cover's own colour
+- **No empty tab bar**: with no extra tabs configured, the tab bar is
+  hidden and the Sonos screen and volume slider use the full height
+
 ## Bug fixes
 
 ### Updated: v0.18.2 - Oct 26, 2026
@@ -310,6 +329,11 @@ version:
 3. Optionally set **Music Path** and the other template fields (see
    [Settings](#settings) below for what each one does), Apply, then
    open `http://<the-ip-you-chose>/`
+
+To try work in progress before it's released, change the container's
+Repository from `ghcr.io/almulder/sonos_panel:latest` to
+`ghcr.io/almulder/sonos_panel:dev` (built from the `develop` branch; may
+be less tested). Switch back to `:latest` to return to the release.
 
 
 ## Running on Windows (no Docker, no server needed)

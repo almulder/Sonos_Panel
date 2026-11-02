@@ -15,14 +15,31 @@
 const RefreshControls = (() => {
   const SCAN_POLL_MS = 2000;
   const DONE_POPUP_MS = 7000;
+  const REQUEST_TIMEOUT_MS = 60 * 1000;
+  // Past this the overlay comes down and the scan just carries on in the
+  // background (a big library on a slow share can take this long).
+  const SCAN_WAIT_MAX_MS = 20 * 60 * 1000;
+  // A scan we asked for that hasn't shown any sign of running by now isn't
+  // going to.
+  const SCAN_START_WAIT_MS = 30 * 1000;
 
   let speakersBusy = false;
   let sourcesBusy = false;
   let onSpeakersDone = null;
   let onSourcesDone = null;
 
+  // A request that never answers mustn't leave a panel covered for good.
   async function postJson(url) {
-    const res = await fetch(url, { method: 'POST' });
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS) : null;
+    let res;
+    try {
+      res = await fetch(url, { method: 'POST', signal: ctl ? ctl.signal : undefined });
+    } catch (err) {
+      throw new Error(err.name === 'AbortError' ? 'The server took too long to answer' : err.message);
+    } finally {
+      clearTimeout(timer);
+    }
     let body = {};
     try { body = await res.json(); } catch (err) { /* empty body */ }
     return { status: res.status, body };
@@ -90,8 +107,10 @@ const RefreshControls = (() => {
         if (body.leftDemo) lines.push(`Found ${body.total} speaker${plural(body.total)} (the panel had started without any)`);
         else lines.push(`${body.total} speaker${plural(body.total)} in the system`);
         if (!body.leftDemo && body.added.length) lines.push(`New: ${body.added.join(', ')}`);
-        if (body.removed.length) lines.push(`No longer found: ${body.removed.join(', ')}`);
-        if (!body.leftDemo && !body.added.length && !body.removed.length) lines.push('No speakers added or removed');
+        const notResponding = body.notResponding || [];
+        if (notResponding.length) lines.push(`Not responding: ${notResponding.join(', ')} (refresh again to remove ${notResponding.length === 1 ? 'it' : 'them'} if gone for good)`);
+        if (body.removed.length) lines.push(`Removed: ${body.removed.join(', ')}`);
+        if (!body.leftDemo && !body.added.length && !body.removed.length && !notResponding.length) lines.push('No speakers added or removed');
       }
       // Coming off demo data, every room on screen (and the focused one)
       // is fake: start the page over rather than patch it, and show the
@@ -173,18 +192,31 @@ const RefreshControls = (() => {
     if (start.status !== 200 && start.status !== 409) {
       return { line: `Local Library: could not start a scan (${start.body.error || start.status})`, error: true };
     }
+    const startedWaiting = Date.now();
+    let sawRunning = start.status === 409;
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, SCAN_POLL_MS));
+      if (Date.now() - startedWaiting > SCAN_WAIT_MAX_MS) {
+        return { line: 'Local Library: still scanning -- it carries on in the background' };
+      }
       let s;
       try {
         s = (await (await fetch('/api/local/status')).json()).scanner;
       } catch (err) {
-        continue; // server restarting or a blip -- keep waiting
+        continue; // server restarting or a blip -- keep waiting (bounded above)
       }
+      if (!s || !s.available) return { line: 'Local Library: the library index is not available', error: true };
+      if (s.state !== 'idle') sawRunning = true;
       if (s.state === 'idle') {
-        if (s.lastError) return { line: `Local Library: scan failed (${s.lastError})`, error: true };
         const last = s.lastScan;
-        if (!last || last.finishedAt === previousFinish) continue; // not started yet
+        const finishedNew = last && last.finishedAt !== previousFinish;
+        if (!finishedNew) {
+          if (sawRunning && s.lastError) return { line: `Local Library: scan failed (${s.lastError})`, error: true };
+          if (!sawRunning && Date.now() - startedWaiting > SCAN_START_WAIT_MS) {
+            return { line: 'Local Library: the scan did not start', error: true };
+          }
+          continue;
+        }
         const total = last.totalTracksInLibrary.toLocaleString();
         if (!last.tracksAdded && !last.tracksRemoved) return { line: `Local Library: no changes (${total} tracks)` };
         const parts = [];

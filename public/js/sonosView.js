@@ -1237,8 +1237,11 @@ const SonosView = (() => {
       artEl.style.backgroundSize = 'cover';
       artEl.style.backgroundRepeat = '';
       artEl.style.backgroundPosition = '';
+      // --icon (no real cover) keeps the full-screen blurred copy away.
+      artEl.classList.remove('nowplaying__art--icon');
       updateArtGlow(track.albumArtUrl);
     } else if (track && track.playing && track.sourceService) {
+      artEl.classList.add('nowplaying__art--icon');
       updateArtGlow(null);
       // No song cover and no station artwork: show the service's own icon
       // (centered, not cropped) rather than an empty square.
@@ -1248,6 +1251,7 @@ const SonosView = (() => {
       artEl.style.backgroundPosition = 'center';
     } else {
       artEl.style.backgroundImage = '';
+      artEl.classList.add('nowplaying__art--icon');
       updateArtGlow(null);
     }
 
@@ -1261,44 +1265,67 @@ const SonosView = (() => {
   // --art-glow on #sonosArt (the CSS only uses it in the stage layout).
   // Results are cached per URL so a re-render of the same track (state
   // polls arrive constantly) costs nothing; only a new URL decodes an image.
+  // Capped (oldest out first): radio with per-track art would otherwise grow
+  // it for as long as the panel stays open.
+  const ART_GLOW_CACHE_MAX = 200;
   const artGlowCache = new Map();
   let artGlowUrl = null;
 
   function updateArtGlow(url) {
     if (url === artGlowUrl) return;
     artGlowUrl = url;
-    if (!url) { artEl.style.removeProperty('--art-glow'); return; }
+    if (!url) { applyArtGlow(null); return; }
     if (artGlowCache.has(url)) { applyArtGlow(artGlowCache.get(url)); return; }
-    const img = new Image();
+    let src = url;
     let crossOrigin = false;
-    try { crossOrigin = new URL(url, location.href).origin !== location.origin; } catch (_) {}
-    // Only ask for CORS on foreign hosts: on our own /api/art and /art
-    // routes it is unnecessary, and many internet art hosts send no CORS
-    // headers, in which case the load fails and we simply get no glow.
+    try {
+      const u = new URL(url, location.href);
+      // Local Library art is an absolute link built from the server's
+      // PUBLIC_BASE_URL (for the speakers' sake), which needn't match the
+      // address this page was opened by -- read it from our own origin.
+      if (u.pathname.startsWith('/art/') || u.pathname.startsWith('/api/art')) src = u.pathname + u.search;
+      else crossOrigin = u.origin !== location.origin;
+    } catch (_) { /* odd URL: try it as-is */ }
+    const img = new Image();
+    // Only ask for CORS on foreign hosts: many internet art hosts send no
+    // CORS headers, in which case the load fails and we simply get no glow.
     if (crossOrigin) img.crossOrigin = 'anonymous';
     img.onload = () => {
-      const color = sampleArtColor(img);
-      artGlowCache.set(url, color);
-      // The track may have changed while this image was loading.
-      if (artGlowUrl === url) applyArtGlow(color);
+      // decode() first so a big folder.jpg decodes off the main thread
+      // instead of inside drawImage.
+      Promise.resolve(img.decode ? img.decode().catch(() => {}) : null).then(() => {
+        const color = sampleArtColor(img);
+        artGlowCache.set(url, color);
+        if (artGlowCache.size > ART_GLOW_CACHE_MAX) artGlowCache.delete(artGlowCache.keys().next().value);
+        // The track may have changed while this image was loading.
+        if (artGlowUrl === url) applyArtGlow(color);
+      });
     };
+    // Not cached: a blip (server restarting) shouldn't cost the glow for
+    // good -- the next time this cover comes round it's tried again.
     img.onerror = () => {
-      artGlowCache.set(url, null);
       if (artGlowUrl === url) applyArtGlow(null);
     };
-    img.src = url;
+    img.src = src;
   }
 
+  // On .app rather than the art: the full-screen background uses it too.
+  const appRootEl = document.querySelector('.app');
   function applyArtGlow(color) {
-    if (color) artEl.style.setProperty('--art-glow', color);
-    else artEl.style.removeProperty('--art-glow');
+    if (color) {
+      appRootEl.style.setProperty('--art-glow', color.glow);
+      appRootEl.style.setProperty('--art-bg', color.bg);
+    } else {
+      appRootEl.style.removeProperty('--art-glow');
+      appRootEl.style.removeProperty('--art-bg');
+    }
   }
 
   // Downsample to 20x20 and average the reasonably saturated, not-too-dark /
   // not-too-light pixels (the "colour" of the cover rather than its black or
   // white background); fall back to the plain average for greyscale covers.
   // Then lift saturation and lightness so even a dark cover glows on the
-  // dark theme. Returns an hsla() string, or null if the canvas is tainted.
+  // dark theme. Returns { glow, bg } colour strings, or null if the canvas is tainted.
   function sampleArtColor(img) {
     const SIZE = 20;
     let data;
@@ -1330,7 +1357,13 @@ const SonosView = (() => {
       (useVivid ? vr : ar) / n, (useVivid ? vg : ag) / n, (useVivid ? vb : ab) / n);
     const sat = s < 0.08 ? s : Math.min(1, s * 1.4 + 0.15);
     const light = Math.min(0.65, Math.max(0.5, l));
-    return `hsla(${Math.round(h * 360)}, ${Math.round(sat * 100)}%, ${Math.round(light * 100)}%, 0.8)`;
+    const hue = Math.round(h * 360);
+    return {
+      glow: `hsla(${hue}, ${Math.round(sat * 100)}%, ${Math.round(light * 100)}%, 0.8)`,
+      // The full-screen background: same hue, dark enough that white text
+      // on top stays readable.
+      bg: `hsl(${hue}, ${Math.round(Math.min(sat, 0.6) * 100)}%, 22%)`
+    };
   }
 
   function rgbToHsl(r, g, b) {

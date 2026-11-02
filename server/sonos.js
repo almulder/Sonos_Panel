@@ -387,30 +387,49 @@ async function doRescanSpeakers() {
       debugLog.warn('sonos', `Speaker re-check: could not add ${member.ZoneName}: ${err.message}`);
     }
   }
+  // Sonos also drops a speaker that's merely switched off or rebooting
+  // from the topology, so one miss only reports it as not responding (it
+  // stays known, hidden as unreachable, and comes back by itself when it
+  // answers again). Missing on a second re-check as well, it's treated
+  // as removed from the system and dropped.
+  const notResponding = [];
   for (const [key, device] of [...devicesByName]) {
-    if (members.has(key)) continue;
+    if (members.has(key)) {
+      missingOnLastRescan.delete(key);
+      continue;
+    }
     const name = displayNameByKey.get(key) || key;
+    if (!missingOnLastRescan.has(key)) {
+      missingOnLastRescan.add(key);
+      notResponding.push(name);
+      continue;
+    }
+    missingOnLastRescan.delete(key);
     devicesByName.delete(key);
     displayNameByKey.delete(key);
     lastRoomsByName.delete(name);
     await dropDeviceSubscriptions(device, name);
     removed.push(name);
   }
-  if (added.length || removed.length) {
-    debugLog.info('sonos', `Speaker re-check: added ${added.join(', ') || 'none'}; removed ${removed.join(', ') || 'none'}; ${devicesByName.size} total`);
+  if (added.length || removed.length || notResponding.length) {
+    debugLog.info('sonos', `Speaker re-check: added ${added.join(', ') || 'none'}; not responding ${notResponding.join(', ') || 'none'}; removed ${removed.join(', ') || 'none'}; ${devicesByName.size} total`);
   }
-  return { ok: true, added: added.sort(), removed: removed.sort(), total: devicesByName.size };
+  return { ok: true, added: added.sort(), removed: removed.sort(), notResponding: notResponding.sort(), total: devicesByName.size };
 }
+const missingOnLastRescan = new Set(); // keys absent from the topology at the previous re-check
 
 // A speaker gone from the household: stop renewing its subscriptions and
-// cancel them (best effort -- it's probably unplugged). The listener
-// parses topology events with its first entry's device, so the list is
-// never emptied here.
+// cancel them (best effort -- it's probably unplugged). Left alone when
+// it's the listener's first entry -- that one also carries the household-
+// wide topology/favorites/alarm subscriptions and is what topology events
+// are parsed with, so cancelling it would stop those until the watchdog's
+// next pass -- or while a resubscribe for it is under way, which would
+// put its timer or subscription straight back.
 async function dropDeviceSubscriptions(device, name) {
   const subs = Listener._deviceSubscriptions;
   if (!Array.isArray(subs)) return;
   const i = subs.findIndex((s) => s.device === device);
-  if (i < 0) return;
+  if (i <= 0 || subscriptionCheckInFlight.has(device)) return;
   const sub = subs[i];
   if (sub._renewTimer) clearInterval(sub._renewTimer);
   await Promise.allSettled(Object.keys(sub.subscriptions || {}).map((sid) =>
@@ -425,7 +444,15 @@ async function dropDeviceSubscriptions(device, name) {
 // Each list comes back as { total, added, removed } against what the
 // panel had cached before (added/removed are null when nothing was
 // cached yet, so there's nothing to compare with).
-async function refreshMusicSources() {
+// One run at a time (a second tap or screen shares it): two overlapping
+// runs would see each other's half-cleared caches and report 0 favorites.
+let sourcesRefreshInFlight = null;
+function refreshMusicSources() {
+  if (!sourcesRefreshInFlight) sourcesRefreshInFlight = doRefreshMusicSources().finally(() => { sourcesRefreshInFlight = null; });
+  return sourcesRefreshInFlight;
+}
+
+async function doRefreshMusicSources() {
   if (usingMock) return { favorites: { total: 0, added: null, removed: null }, playlists: { total: 0, added: null, removed: null } };
   const roomName = displayNameByKey.values().next().value;
   const favoritesBefore = favoritesCache.items;
