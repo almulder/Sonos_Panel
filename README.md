@@ -603,7 +603,7 @@ name in the first column is the environment variable in both cases.
 | `TRANSCODE_CACHE_GB` | `5` | Disk space for converted files, in the appdata folder. The least recently played are removed first |
 | `PLEX_URL` | (blank) | Your Plex server, e.g. `http://10.1.10.25:32400`. With `PLEX_TOKEN`, shows your Plex playlists in the Local Library -- see [Plex playlists](#plex-playlists) |
 | `PLEX_TOKEN` | (blank) | Your Plex token (X-Plex-Token) |
-| `PLEX_PATH_PREFIX` | auto | The folder Plex sees as the root of your Music Path, e.g. `/data/music`. Only set it if no Plex tracks are matched |
+| `PLEX_PATH_PREFIX` | auto | The folder Plex sees as the root of your Music Path, e.g. `/data/music` -- several separated by `;` if your Plex library spans folders. Only set it if no Plex tracks are matched |
 | `DATA_DIR` | `./data` | Where the library index, artwork cache, and saved settings live |
 | `TAB2_URL`, `TAB3_URL`, `TAB4_URL` | (blank) | Each adds an extra tab embedding that URL. Optional `TAB2_TITLE` / `_ICON` / `_COLOR` etc. style them -- see [Extra tabs](#extra-tabs) |
 
@@ -869,7 +869,7 @@ Library -- no copying them into Sonos.
 The folder names can differ -- Plex might see
 `/data/music/Artist/Album/01.flac` where the panel sees
 `/music/Artist/Album/01.flac` -- and the difference is worked out
-automatically. A track whose path can't be matched falls back to its
+automatically, including a Plex library that spans several folders. A track whose path can't be matched falls back to its
 artist, album and title (with the length as a tie-breaker); anything
 still not found is skipped and counted, and the log names a few. If
 nothing matches at all, set `PLEX_PATH_PREFIX` to the folder Plex

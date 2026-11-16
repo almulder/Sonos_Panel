@@ -40,7 +40,12 @@ const debugLog = require('./debugLog');
 
 const PLEX_URL = String(process.env.PLEX_URL || '').trim().replace(/\/+$/, '');
 const PLEX_TOKEN = String(process.env.PLEX_TOKEN || '').trim();
-const PLEX_PATH_PREFIX = normalizePath(String(process.env.PLEX_PATH_PREFIX || '').trim()).replace(/\/+$/, '');
+// One folder, or several separated by ';' (a Plex library can span
+// several folders).
+const PLEX_PATH_PREFIXES = String(process.env.PLEX_PATH_PREFIX || '')
+  .split(';')
+  .map((p) => normalizePath(p.trim()).replace(/\/+$/, ''))
+  .filter(Boolean);
 
 const REQUEST_TIMEOUT_MS = 20000;
 const ITEMS_PAGE_SIZE = 500;
@@ -54,10 +59,12 @@ let db = null;
 let stmts = null;
 let syncTimer = null;
 let syncInFlight = null; // the running sync's promise, shared by callers
-// Plex-side folder that maps to the Music Path root, learned from the
-// first track whose path matched (or PLEX_PATH_PREFIX). Kept across
-// syncs; dropped if it stops matching anything.
-let learnedPrefix = PLEX_PATH_PREFIX || null;
+// Plex-side folders that map to the Music Path root, learned from
+// tracks whose paths matched (or PLEX_PATH_PREFIX). A Plex music library
+// often spans several folders, so every one found is kept (most
+// recently matched first); kept across syncs.
+const MAX_PREFIXES = 20;
+const learnedPrefixes = [...PLEX_PATH_PREFIXES];
 
 const state = {
   lastSync: null, // { finishedAt, playlists, tracks, matched, unmatched, durationSeconds }
@@ -133,7 +140,7 @@ function init(database) {
     insertTrack: db.prepare('INSERT INTO plex_playlist_tracks (playlist_id, position, path) VALUES (?, ?, ?)')
   };
   const existing = db.prepare('SELECT COUNT(*) AS c FROM plex_playlists').get().c;
-  debugLog.info('plex', `Plex playlists enabled: ${PLEX_URL} (${existing} playlist(s) from the last sync; path prefix ${PLEX_PATH_PREFIX ? `"${PLEX_PATH_PREFIX}" (PLEX_PATH_PREFIX)` : 'auto-detect'})`);
+  debugLog.info('plex', `Plex playlists enabled: ${PLEX_URL} (${existing} playlist(s) from the last sync; path prefix ${PLEX_PATH_PREFIXES.length ? `"${PLEX_PATH_PREFIXES.join('; ')}" (PLEX_PATH_PREFIX)` : 'auto-detect'})`);
   syncTimer = setInterval(() => { sync('interval').catch(() => {}); }, SYNC_INTERVAL_MS);
   if (syncTimer.unref) syncTimer.unref();
   return true;
@@ -210,23 +217,30 @@ function relUnderPrefix(file, prefix) {
   return file.toLowerCase().startsWith(p.toLowerCase()) ? file.slice(p.length) : null;
 }
 
-// Tries the known prefix first, then every trailing part of the Plex
+// Tries the known prefixes first, then every trailing part of the Plex
 // path (longest first, at least folder/file) -- the first that exists
-// in the index is the match, and the part in front of it becomes the
-// learned prefix for the rest of the sync.
+// in the index is the match, and the part in front of it is remembered
+// as another known prefix.
 function matchByPath(file) {
   if (!file) return null;
-  const known = relUnderPrefix(file, learnedPrefix);
-  if (known && stmts.trackByPath.get(known)) return known;
-  if (PLEX_PATH_PREFIX) return null; // explicit prefix: no guessing
+  for (let k = 0; k < learnedPrefixes.length; k++) {
+    const known = relUnderPrefix(file, learnedPrefixes[k]);
+    if (known && stmts.trackByPath.get(known)) {
+      // Move to the front: tracks of one folder tend to come in runs.
+      if (k > 0) learnedPrefixes.unshift(learnedPrefixes.splice(k, 1)[0]);
+      return known;
+    }
+  }
+  if (PLEX_PATH_PREFIXES.length) return null; // explicit prefixes: no guessing
   const segs = file.split('/').filter(Boolean);
   for (let i = 0; i <= segs.length - 2; i++) {
     const rel = segs.slice(i).join('/');
     if (stmts.trackByPath.get(rel)) {
       const prefix = `${file.startsWith('/') ? '/' : ''}${segs.slice(0, i).join('/')}`;
-      if (prefix !== learnedPrefix) {
-        learnedPrefix = prefix;
-        debugLog.info('plex', `Plex path prefix detected: "${prefix || '/'}" = the panel's Music Path`);
+      if (!learnedPrefixes.includes(prefix)) {
+        learnedPrefixes.unshift(prefix);
+        if (learnedPrefixes.length > MAX_PREFIXES) learnedPrefixes.pop();
+        debugLog.info('plex', `Plex folder "${prefix || '/'}" matches the panel's Music Path`);
       }
       return rel;
     }
