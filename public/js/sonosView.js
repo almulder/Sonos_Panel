@@ -2326,7 +2326,7 @@ const SonosView = (() => {
     if (/^A:(ALBUM|ARTIST|GENRE|COMPOSER)\//.test(v)) return true;
     if (v.startsWith('L:')) {
       const token = v.slice(2).split(LOCAL_SEP)[0].split(':')[0];
-      return ['ALBUM', 'ARTIST', 'ARTISTTRACKS', 'GENRE', 'GENRETRACKS', 'RECENT'].includes(token);
+      return ['ALBUM', 'ARTIST', 'ARTISTTRACKS', 'GENRE', 'GENRETRACKS', 'RECENT', 'PLEXPLAYLIST'].includes(token);
     }
     return false;
   }
@@ -2429,7 +2429,9 @@ const SonosView = (() => {
         // Albums (and any container of tracks) can be added wholesale.
         // Skipped for the big index categories -- "add all of Artists"
         // isn't a meaningful action.
-        if (state.categoryId !== state.containerId || state.categoryId === 'A:ALBUM') {
+        // Plex Playlists is the exception the other way: its rows ARE
+        // playlists, so queue/add-to-playlist make sense right there.
+        if (state.categoryId !== state.containerId || state.categoryId === 'A:ALBUM' || state.categoryId === 'L:PLEXPLAYLISTS') {
           li.appendChild(buildQueueButton(item.title, { containerId: item.id }));
           li.appendChild(buildAddToPlaylistButton(item.title, { containerId: item.id }));
         }

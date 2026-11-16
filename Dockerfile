@@ -62,6 +62,10 @@ ENV PUBLIC_BASE_URL=""
 # (days mon-sun), evaluated in TZ. Blank = rescan only at container
 # start (which always happens when a Music Path is mounted).
 ENV RESCAN_SCHEDULE=""
+# Plex playlists (optional, needs MUSIC_DIR): see README -> Plex playlists.
+ENV PLEX_URL=""
+ENV PLEX_TOKEN=""
+ENV PLEX_PATH_PREFIX=""
 EXPOSE 3000
 
 CMD ["node", "server/index.js"]

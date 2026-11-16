@@ -160,6 +160,13 @@ const RefreshControls = (() => {
       if (libraryResult) {
         if (libraryResult.error) failed = true;
         lines.push(libraryResult.line);
+        // Plex playlists are matched against the library, so they're
+        // re-read once the rescan above has finished.
+        const plexResult = await syncPlexPlaylists();
+        if (plexResult) {
+          if (plexResult.error) failed = true;
+          lines.push(plexResult.line);
+        }
       }
       if (onSourcesDone) await onSourcesDone();
     } catch (err) {
@@ -234,6 +241,24 @@ const RefreshControls = (() => {
       // Short enough for the badge on the button.
       if (s.total) onProgress(`${Math.round((s.processed / s.total) * 100)}%`);
     }
+  }
+
+  // Resolves null when Plex playlists aren't set up, otherwise { line, error? }.
+  async function syncPlexPlaylists() {
+    let status;
+    try {
+      status = await (await fetch('/api/local/status')).json();
+    } catch (err) {
+      return null;
+    }
+    if (!status.plex || !status.plex.enabled) return null;
+    const result = await postJson('/api/local/plex-sync').catch((err) => ({ status: 0, body: { error: err.message } }));
+    if (result.status !== 200) {
+      return { line: `Plex Playlists: failed (${result.body.error || result.status})`, error: true };
+    }
+    const b = result.body;
+    const missing = b.unmatched ? `, ${b.unmatched.toLocaleString()} not found in the library` : '';
+    return { line: `Plex Playlists: ${b.playlists} playlist${plural(b.playlists)}, ${b.matched.toLocaleString()} song${plural(b.matched)}${missing}` };
   }
 
   function plural(n) {

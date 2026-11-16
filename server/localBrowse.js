@@ -26,6 +26,9 @@
 //   L:GENRES / :term            genres (flat), L:GENRE<SEP>g -> albums
 //   L:COMPOSERS / <SEP>B /:term composers, L:COMPOSER<SEP>c -> tracks
 //   L:FOLDERS, L:FOLDER<SEP>rel folder tree, derived from indexed paths
+//   L:PLEXPLAYLISTS / :term     playlists mirrored from Plex (v0.20.0,
+//                               see plexPlaylists.js)
+//   L:PLEXPLAYLIST<SEP>id       one Plex playlist's matched tracks
 //
 // Every leaf track item carries a ready-made DIDL `metadata` string
 // (with <res duration>), so whichever play path picks it up hands the
@@ -268,6 +271,7 @@ function getCategories() {
   if (genreCount > 0) categories.push({ id: 'L:GENRES', title: 'Genres' });
   const composerCount = prep("SELECT COUNT(*) AS c FROM tracks WHERE composer IS NOT NULL AND composer <> ''").get().c;
   if (composerCount > 0) categories.push({ id: 'L:COMPOSERS', title: 'Composers' });
+  if (plexPlaylistCount() > 0) categories.push({ id: 'L:PLEXPLAYLISTS', title: 'Plex Playlists' });
   categories.push({ id: 'L:TRACKS', title: 'Songs' });
   categories.push({ id: 'L:FOLDERS', title: 'Folders' });
   return categories;
@@ -387,9 +391,64 @@ function folderChildren(relDir, start, limit) {
 }
 
 // ---------------------------------------------------------------------
+// Plex playlists -- tables written by plexPlaylists.js. They may not
+// exist (Plex not configured), so every reader checks first.
+// ---------------------------------------------------------------------
+function plexTablesExist() {
+  return !!prep("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'plex_playlists'").get();
+}
+
+function plexPlaylistCount() {
+  if (!plexTablesExist()) return 0;
+  return prep('SELECT COUNT(*) AS c FROM plex_playlists WHERE matched_count > 0').get().c;
+}
+
+function listPlexPlaylists(search, start, limit) {
+  if (!plexTablesExist()) return page([], 0, start);
+  const where = search !== undefined ? "AND title LIKE ? ESCAPE '\\'" : '';
+  const params = search !== undefined ? [likePattern(search)] : [];
+  // Art: the first matched track's cover stands in for the playlist.
+  return pagedQuery(
+    `SELECT COUNT(*) AS c FROM plex_playlists WHERE matched_count > 0 ${where}`,
+    `SELECT p.id, p.title, p.smart, p.plex_count, p.matched_count,
+            (SELECT t.art FROM plex_playlist_tracks pt JOIN tracks t ON t.path = pt.path
+             WHERE pt.playlist_id = p.id AND t.art IS NOT NULL AND t.art <> ''
+             ORDER BY pt.position LIMIT 1) AS art
+     FROM plex_playlists p WHERE p.matched_count > 0 ${where}
+     ORDER BY p.position LIMIT ? OFFSET ?`,
+    params, start, limit,
+    (r) => {
+      const songs = `${r.matched_count} song${r.matched_count === 1 ? '' : 's'}`;
+      const missing = r.plex_count > r.matched_count ? ` (${r.plex_count - r.matched_count} not found)` : '';
+      return {
+        id: `L:PLEXPLAYLIST${SEP}${r.id}`,
+        title: r.title,
+        artist: `${r.smart ? 'Smart playlist · ' : ''}${songs}${missing}`,
+        browsable: true,
+        albumArtUrl: artUrl(r.art)
+      };
+    }
+  );
+}
+
+// Plex order, kept as-is (duplicates included). Files that left the
+// index since the last sync simply drop out of the join.
+function plexPlaylistTracks(id, start, limit) {
+  if (!plexTablesExist()) return page([], 0, start);
+  return pagedQuery(
+    'SELECT COUNT(*) AS c FROM plex_playlist_tracks pt JOIN tracks t ON t.path = pt.path WHERE pt.playlist_id = ?',
+    `SELECT t.path, t.title, t.artist, t.album, t.duration_s, t.mime, t.art
+     FROM plex_playlist_tracks pt JOIN tracks t ON t.path = pt.path
+     WHERE pt.playlist_id = ? ORDER BY pt.position LIMIT ? OFFSET ?`,
+    [id], start, limit, trackItem
+  );
+}
+
+// ---------------------------------------------------------------------
 // ID parsing + dispatch
 // ---------------------------------------------------------------------
 const CATEGORY_TOKENS = [
+  'PLEXPLAYLISTS', 'PLEXPLAYLIST',
   'ARTISTTRACKS', 'GENRETRACKS', 'RECENT', 'ALL',
   'ARTISTS', 'ALBUMS', 'TRACKS', 'GENRES', 'COMPOSERS', 'FOLDERS',
   'ARTIST', 'ALBUM', 'TRACK', 'GENRE', 'COMPOSER', 'FOLDER'
@@ -556,6 +615,10 @@ async function browsePage(containerId, start = 0, limit = PAGE_LIMIT) {
         return folderChildren('', safeStart, safeLimit);
       case 'FOLDER':
         return folderChildren(args[0], safeStart, safeLimit);
+      case 'PLEXPLAYLISTS':
+        return listPlexPlaylists(search, safeStart, safeLimit);
+      case 'PLEXPLAYLIST':
+        return plexPlaylistTracks(args[0], safeStart, safeLimit);
       case 'RECENT':
         // Newest files first -- indexed on mtime_ms, so the sort is
         // cheap; a fresh rip clusters at the top by album naturally.

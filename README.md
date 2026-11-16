@@ -204,6 +204,17 @@ PoE panel whose CPU is ~13x slower than a laptop):
   [Running on Unraid](#running-on-unraid-recommended)); `:latest` only
   changes with releases like this one
 
+### Updated: v0.20.0 - Nov 16, 2026
+
+- **Plex playlists in the Local Library**: set `PLEX_URL` and
+  `PLEX_TOKEN` and your Plex music playlists (smart playlists included)
+  appear under Local Library -> **Plex Playlists**, with Play, Shuffle,
+  queue and add-to-playlist like any album. Each Plex track is matched
+  to the same file in your Music Path and streamed by the panel, so
+  there's no Sonos index or playlist size limit. Plex stays the master
+  copy -- edit playlists in Plex and the panel follows (see
+  [Plex playlists](#plex-playlists))
+
 ## Bug fixes
 
 ### Updated: v0.18.2 - Oct 26, 2026
@@ -574,6 +585,9 @@ name in the first column is the environment variable in both cases.
 | `TZ` | `America/Denver` | Timezone for the rescan schedule |
 | `PORT` | `3000` | Port the panel listens on (the Unraid template uses `80`) |
 | `PUBLIC_BASE_URL` | auto | URL the speakers use to stream from the panel. Auto-detected; only set it if local files won't play |
+| `PLEX_URL` | (blank) | Your Plex server, e.g. `http://10.1.10.25:32400`. With `PLEX_TOKEN`, shows your Plex playlists in the Local Library -- see [Plex playlists](#plex-playlists) |
+| `PLEX_TOKEN` | (blank) | Your Plex token (X-Plex-Token) |
+| `PLEX_PATH_PREFIX` | auto | The folder Plex sees as the root of your Music Path, e.g. `/data/music`. Only set it if no Plex tracks are matched |
 | `DATA_DIR` | `./data` | Where the library index, artwork cache, and saved settings live |
 | `TAB2_URL`, `TAB3_URL`, `TAB4_URL` | (blank) | Each adds an extra tab embedding that URL. Optional `TAB2_TITLE` / `_ICON` / `_COLOR` etc. style them -- see [Extra tabs](#extra-tabs) |
 
@@ -790,6 +804,37 @@ and the next scan picks them up.
   every scan re-verifies each folder -- added covers upgrade, deleted
   covers fall back, a wiped art cache regenerates, and re-tagged
   embedded covers refresh automatically
+
+### Plex playlists
+
+If Plex already manages your playlists, the panel can show them under
+Local Library -> **Plex Playlists** and play them through the Local
+Library -- no copying them into Sonos.
+
+1. Find your Plex token: in Plex Web, open any track's **...** menu ->
+   **Get Info** -> **View XML**; the address that opens ends in
+   `X-Plex-Token=...`. That value is the token. Treat it like a
+   password -- it's sent to your Plex server only, never logged.
+2. Set `PLEX_URL` (e.g. `http://10.1.10.25:32400`) and `PLEX_TOKEN`,
+   then restart the container.
+3. After the startup scan, the playlists appear. The container log
+   says how many tracks were matched (`Plex playlist sync: ...`).
+
+**Plex must read the same music files as the panel's Music Path.**
+The folder names can differ -- Plex might see
+`/data/music/Artist/Album/01.flac` where the panel sees
+`/music/Artist/Album/01.flac` -- and the difference is worked out
+automatically. A track whose path can't be matched falls back to its
+artist, album and title (with the length as a tie-breaker); anything
+still not found is skipped and counted, and the log names a few. If
+nothing matches at all, set `PLEX_PATH_PREFIX` to the folder Plex
+uses for your music.
+
+Playlists are re-read at startup, after every library scan (including
+the `RESCAN_SCHEDULE` ones), every 15 minutes, and when you tap the
+Sources refresh button. They're read-only in the panel: to change one,
+edit it in Plex. As with any container, Play queues up to the first
+500 songs.
 
 ## Adding a music service
 

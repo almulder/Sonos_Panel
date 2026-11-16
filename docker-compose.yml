@@ -51,6 +51,13 @@ services:
       # Local Music Library scheduled rescans -- daily@HH:MM or
       # weekly@DAY@HH:MM (days mon-sun), in the TZ below. A rescan also
       # always runs at container start. Blank/unset = startup scans only.
+      # Local Music Library only: show your Plex music playlists under
+      # Local Library -> Plex Playlists, played from the same files.
+      # Plex must read the same music as the /music mount. The token is
+      # your X-Plex-Token (see README -> Plex playlists).
+      # - PLEX_URL=http://10.1.10.25:32400
+      # - PLEX_TOKEN=
+      # - PLEX_PATH_PREFIX=   # blank = auto-detect
       # - RESCAN_SCHEDULE=daily@03:30
       # - TZ=America/Denver
       # Up to three extra tabs, each embedding another local dashboard

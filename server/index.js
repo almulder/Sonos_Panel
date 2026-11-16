@@ -12,6 +12,7 @@ const sonos = require('./sonos');
 const localLibrary = require('./localLibrary');
 const localScanner = require('./localScanner');
 const localBrowse = require('./localBrowse');
+const plexPlaylists = require('./plexPlaylists');
 const artProxy = require('./artProxy');
 const debugLog = require('./debugLog');
 
@@ -662,9 +663,21 @@ app.get('/api/local/status', (req, res) => {
     streamBase: enabled ? localLibrary.getPublicBaseUrl() : null,
     publicBaseUrlSource: process.env.PUBLIC_BASE_URL ? 'env' : 'auto-detect',
     phase: 3,
-    scanner: localScanner.getStatus()
+    scanner: localScanner.getStatus(),
+    plex: plexPlaylists.getStatus()
   });
 });
+
+// Re-read the playlists from Plex now (the Sources refresh button calls
+// this after the library rescan). Waits for the sync; a sync already
+// running is joined rather than started twice.
+app.post('/api/local/plex-sync', asyncHandler(async (req, res) => {
+  if (!plexPlaylists.isEnabled()) {
+    return res.status(503).json({ ok: false, error: 'Plex playlists are not enabled' });
+  }
+  const result = await plexPlaylists.sync('manual');
+  res.status(result.ok ? 200 : 502).json(result);
+}));
 
 // Category roots for the Local Music Library browse UI -- same shape
 // as the Sonos music-library categories endpoint the client already
@@ -833,13 +846,24 @@ async function main() {
     .then((urls) => artProxy.warm(urls))
     .catch((err) => debugLog.warn('art', `Art warm-up failed: ${err.message}`));
   localLibrary.logStartupState();
+  // Plex playlists are matched against the index, so each finished scan
+  // (startup, scheduled, manual) re-syncs them -- that's also how the
+  // first sync after boot happens.
+  let lastScanState = 'idle';
   const scannerReady = localScanner.init({
     onProgress: (progress) => {
       // broadcast is defined a few lines down; guard for the tiny
       // window before it exists (init itself doesn't emit).
       if (typeof broadcastScan === 'function') broadcastScan(progress);
+      const finished = lastScanState !== 'idle' && progress.state === 'idle';
+      lastScanState = progress.state;
+      if (finished && plexPlaylists.isEnabled()) {
+        const why = progress.lastScan && progress.lastScan.reason;
+        plexPlaylists.sync(why ? `after ${why} scan` : 'after scan').catch(() => {});
+      }
     }
   });
+  plexPlaylists.init(scannerReady ? localScanner.getDatabase() : null);
 
   const server = app.listen(PORT, () => {
     debugLog.info('server', `Sonos Panel v${PKG_VERSION} listening on http://localhost:${PORT}`);
