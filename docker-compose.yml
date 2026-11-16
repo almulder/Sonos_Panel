@@ -51,6 +51,11 @@ services:
       # Local Music Library scheduled rescans -- daily@HH:MM or
       # weekly@DAY@HH:MM (days mon-sun), in the TZ below. A rescan also
       # always runs at container start. Blank/unset = startup scans only.
+      # Local Music Library only: files Sonos can't play (hi-res FLAC,
+      # DSD, Opus...) are converted to FLAC when played, cached in the
+      # appdata folder. TRANSCODE=off skips them instead.
+      # - TRANSCODE_CACHE_GB=5
+      # - TRANSCODE=off
       # Local Music Library only: show your Plex music playlists under
       # Local Library -> Plex Playlists, played from the same files.
       # Plex must read the same music as the /music mount. The token is

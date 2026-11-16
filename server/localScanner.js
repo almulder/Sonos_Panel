@@ -52,6 +52,7 @@ const fs = require('fs');
 const path = require('path');
 const debugLog = require('./debugLog');
 const localLibrary = require('./localLibrary');
+const transcoder = require('./transcoder');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const RESCAN_SCHEDULE_RAW = (process.env.RESCAN_SCHEDULE || '').trim();
@@ -80,6 +81,22 @@ const SCAN_EXTENSIONS = new Set([
   '.mp3', '.mp4', '.m4a', '.aac', '.wma', '.ogg', '.oga',
   '.flac', '.aif', '.aiff', '.wav'
 ]);
+
+// With transcoding on (v0.21.0), formats Sonos can't play at all are
+// worth scanning too -- they're indexed and converted on play.
+function isScannedExtension(ext) {
+  return SCAN_EXTENSIONS.has(ext) || (transcoder.isEnabled() && transcoder.TRANSCODE_ONLY_EXTENSIONS.includes(ext));
+}
+
+// Lossy sources convert to 16-bit FLAC (more bits would add nothing).
+function isLossySource(ext, format) {
+  const codec = String((format && format.codec) || '').toUpperCase();
+  if (['.mp3', '.opus'].includes(ext)) return true;
+  if (['.ogg', '.oga'].includes(ext)) return !codec.includes('FLAC');
+  if (['.mp4', '.m4a', '.aac'].includes(ext)) return !codec.includes('ALAC');
+  if (ext === '.wma') return !codec.includes('LOSSLESS');
+  return false;
+}
 
 // ---------------------------------------------------------------------
 // Compatibility evaluation. Pure function so it's directly testable.
@@ -148,6 +165,15 @@ function evaluateCompatibility(ext, format) {
       return losslessCap(16, 'AIFF');
     case '.wav':
       return losslessCap(16, 'WAV');
+    case '.opus':
+      return { ok: false, reason: 'Opus codec is not supported by Sonos' };
+    case '.dsf':
+    case '.dff':
+      return { ok: false, reason: 'DSD is not supported by Sonos' };
+    case '.ape':
+      return { ok: false, reason: "Monkey's Audio (APE) is not supported by Sonos" };
+    case '.wv':
+      return { ok: false, reason: 'WavPack is not supported by Sonos' };
     default:
       return { ok: false, reason: `unsupported file type ${ext}` };
   }
@@ -216,6 +242,7 @@ const scanState = {
   indexed: 0,
   incompatible: 0,
   skippedUnchanged: 0,
+  transcoded: 0,
   batches: 0,
   lastScan: null,
   lastError: null
@@ -311,22 +338,25 @@ function init(options) {
     // backfilled WITHOUT re-parsing audio -- see resolveArtPass().
     const trackCols = db.prepare('PRAGMA table_info(tracks)').all().map((c) => c.name);
     if (!trackCols.includes('art')) db.exec('ALTER TABLE tracks ADD COLUMN art TEXT');
+    // v0.21.0: transcode target ("flac:24:48000") for a file Sonos
+    // can't play as-is; NULL = plays natively.
+    if (!trackCols.includes('transcode')) db.exec('ALTER TABLE tracks ADD COLUMN transcode TEXT');
     fs.mkdirSync(path.join(DATA_DIR, ART_CACHE_DIRNAME), { recursive: true });
     stmts = {
       getTrack: db.prepare('SELECT mtime_ms, size FROM tracks WHERE path = ?'),
       touchTrack: db.prepare('UPDATE tracks SET generation = ? WHERE path = ?'),
       upsertTrack: db.prepare(`
         INSERT INTO tracks (path, mtime_ms, size, generation, title, artist, album_artist, album,
-                            composer, genre, track_no, disc_no, year, duration_s, mime, embedded_art, art)
+                            composer, genre, track_no, disc_no, year, duration_s, mime, embedded_art, art, transcode)
         VALUES (@path, @mtime_ms, @size, @generation, @title, @artist, @album_artist, @album,
-                @composer, @genre, @track_no, @disc_no, @year, @duration_s, @mime, @embedded_art, @art)
+                @composer, @genre, @track_no, @disc_no, @year, @duration_s, @mime, @embedded_art, @art, @transcode)
         ON CONFLICT(path) DO UPDATE SET
           mtime_ms=excluded.mtime_ms, size=excluded.size, generation=excluded.generation,
           title=excluded.title, artist=excluded.artist, album_artist=excluded.album_artist,
           album=excluded.album, composer=excluded.composer, genre=excluded.genre,
           track_no=excluded.track_no, disc_no=excluded.disc_no, year=excluded.year,
           duration_s=excluded.duration_s, mime=excluded.mime, embedded_art=excluded.embedded_art,
-          art=excluded.art
+          art=excluded.art, transcode=excluded.transcode
       `),
       unresolvedArt: db.prepare("SELECT path, art, embedded_art FROM tracks WHERE art IS NULL OR art = '' OR art LIKE 'e:%'"),
       setArt: db.prepare('UPDATE tracks SET art = ? WHERE path = ?'),
@@ -341,11 +371,31 @@ function init(options) {
       deleteStaleIncompatible: db.prepare('DELETE FROM incompatible WHERE generation <> ?'),
       countTracks: db.prepare('SELECT COUNT(*) AS c FROM tracks'),
       countIncompatible: db.prepare('SELECT COUNT(*) AS c FROM incompatible'),
+      countTranscoded: db.prepare('SELECT COUNT(*) AS c FROM tracks WHERE transcode IS NOT NULL'),
+      getTranscode: db.prepare('SELECT transcode FROM tracks WHERE path = ?'),
       listIncompatible: db.prepare('SELECT path, reason FROM incompatible ORDER BY path'),
       getIncompatibleReason: db.prepare('SELECT reason FROM incompatible WHERE path = ?'),
       getMeta: db.prepare('SELECT value FROM meta WHERE key = ?'),
       setMeta: db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
     };
+    // Transcoding switched on or off since the last run: the verdicts it
+    // decides are stale. Turning it on forgets the incompatible list
+    // (those files get one fresh look and most become tracks); turning
+    // it off drops the transcoded tracks (they get re-filed as
+    // incompatible, or vanish if only scanned because of transcoding).
+    const transcodeMode = transcoder.isEnabled() ? 'on' : 'off';
+    const prevModeRow = stmts.getMeta.get('transcodeMode');
+    const prevMode = prevModeRow ? prevModeRow.value : 'off';
+    if (prevMode !== transcodeMode) {
+      if (transcodeMode === 'on') {
+        const n = db.prepare('DELETE FROM incompatible').run().changes;
+        if (n) debugLog.info('scanner', `Transcoding is now on: re-checking ${n} previously incompatible file(s) on this scan`);
+      } else {
+        const n = db.prepare('DELETE FROM tracks WHERE transcode IS NOT NULL').run().changes;
+        if (n) debugLog.info('scanner', `Transcoding is now off: ${n} track(s) that needed it are re-checked on this scan`);
+      }
+      stmts.setMeta.run('transcodeMode', transcodeMode);
+    }
     const lastScanRow = stmts.getMeta.get('lastScan');
     if (lastScanRow) {
       try { scanState.lastScan = JSON.parse(lastScanRow.value); } catch (err) { /* ignore */ }
@@ -404,7 +454,7 @@ async function enumerateFiles() {
       const rel = relDir ? `${relDir}/${ent.name}` : ent.name;
       if (ent.isDirectory()) {
         dirs.push(rel);
-      } else if (ent.isFile() && SCAN_EXTENSIONS.has(path.extname(ent.name).toLowerCase())) {
+      } else if (ent.isFile() && isScannedExtension(path.extname(ent.name).toLowerCase())) {
         found.push(rel);
         if (found.length % 5000 === 0) {
           emitProgress({ state: 'enumerating', total: found.length });
@@ -543,9 +593,16 @@ async function processFile(rel, generation, mm) {
     meta = await mm.parseFile(abs, { duration: true });
     verdict = evaluateCompatibility(ext, meta.format);
   } catch (err) {
-    verdict = { ok: false, reason: `unreadable (${err.message})` };
+    verdict = { ok: false, unreadable: true, reason: `unreadable (${err.message})` };
   }
-  if (!verdict.ok) {
+  // Anything Sonos refuses but ffmpeg can read becomes a normal track
+  // that's converted when played (see transcoder.js).
+  let transcode = null;
+  if (!verdict.ok && !verdict.unreadable && transcoder.isEnabled()) {
+    transcode = transcoder.targetFor(meta && meta.format, isLossySource(ext, meta && meta.format));
+    scanState.transcoded += 1;
+  }
+  if (!verdict.ok && !transcode) {
     scanState.incompatible += 1;
     pendingOps.push({
       kind: 'incompatible', path: rel, reason: verdict.reason,
@@ -574,9 +631,10 @@ async function processFile(rel, generation, mm) {
       disc_no: (common.disk && common.disk.no) || null,
       year: common.year || null,
       duration_s: Math.round((format.duration) || 0),
-      mime: localLibrary.contentTypeFor(rel),
+      mime: transcode ? 'audio/flac' : localLibrary.contentTypeFor(rel),
       embedded_art: common.picture && common.picture.length > 0 ? 1 : 0,
-      art: resolveArtInline(rel, common)
+      art: resolveArtInline(rel, common),
+      transcode
     }
   });
 }
@@ -691,6 +749,7 @@ function startScan(reason) {
   scanState.indexed = 0;
   scanState.incompatible = 0;
   scanState.skippedUnchanged = 0;
+  scanState.transcoded = 0;
   scanState.batches = 0;
   scanState.lastError = null;
   runScan().catch((err) => {
@@ -761,6 +820,7 @@ async function runScan() {
     indexedOrUpdated: scanState.indexed,
     skippedUnchanged: scanState.skippedUnchanged,
     incompatible: stmts.countIncompatible.get().c,
+    transcoded: stmts.countTranscoded.get().c,
     removed: removedTracks + removedIncompatible,
     artPass,
     totalTracksInLibrary: stmts.countTracks.get().c
@@ -768,7 +828,7 @@ async function runScan() {
   stmts.setMeta.run('lastScan', JSON.stringify(scanState.lastScan));
   scanState.state = 'idle';
   scanState.reason = null;
-  debugLog.info('scanner', `Scan complete in ${scanState.lastScan.durationSeconds}s: ${scanState.lastScan.totalTracksInLibrary} tracks indexed, ${scanState.lastScan.incompatible} incompatible, ${scanState.lastScan.skippedUnchanged} unchanged, ${scanState.lastScan.removed} removed.`);
+  debugLog.info('scanner', `Scan complete in ${scanState.lastScan.durationSeconds}s: ${scanState.lastScan.totalTracksInLibrary} tracks indexed (${scanState.lastScan.transcoded} converted on play), ${scanState.lastScan.incompatible} incompatible, ${scanState.lastScan.skippedUnchanged} unchanged, ${scanState.lastScan.removed} removed.`);
   emitProgress({});
 }
 
@@ -806,7 +866,8 @@ function getStatus() {
     lastScan: scanState.lastScan,
     counts: {
       tracks: stmts.countTracks.get().c,
-      incompatible: stmts.countIncompatible.get().c
+      incompatible: stmts.countIncompatible.get().c,
+      transcoded: stmts.countTranscoded.get().c
     },
     schedule: describeSchedule(schedule),
     incompatibleListFile: path.join(DATA_DIR, INCOMPATIBLE_FILENAME)
@@ -845,6 +906,14 @@ function getIncompatibleReasonForUri(uri) {
   return null;
 }
 
+// Transcode target for a library-relative path, or null when the file
+// plays natively / isn't indexed.
+function getTranscodeTarget(rel) {
+  if (!db || !rel) return null;
+  const row = stmts.getTranscode.get(rel);
+  return row ? row.transcode : null;
+}
+
 function getIncompatibleList() {
   if (!db) return [];
   return stmts.listIncompatible.all().map((r) => ({
@@ -861,6 +930,7 @@ module.exports = {
   getIncompatibleList,
   getIncompatibleReason,
   getIncompatibleReasonForUri,
+  getTranscodeTarget,
   isAvailable,
   // exported for direct testing
   evaluateCompatibility,

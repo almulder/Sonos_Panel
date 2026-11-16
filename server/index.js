@@ -13,6 +13,7 @@ const localLibrary = require('./localLibrary');
 const localScanner = require('./localScanner');
 const localBrowse = require('./localBrowse');
 const plexPlaylists = require('./plexPlaylists');
+const transcoder = require('./transcoder');
 const artProxy = require('./artProxy');
 const debugLog = require('./debugLog');
 
@@ -664,7 +665,8 @@ app.get('/api/local/status', (req, res) => {
     publicBaseUrlSource: process.env.PUBLIC_BASE_URL ? 'env' : 'auto-detect',
     phase: 3,
     scanner: localScanner.getStatus(),
-    plex: plexPlaylists.getStatus()
+    plex: plexPlaylists.getStatus(),
+    transcode: transcoder.getStatus()
   });
 });
 
@@ -743,6 +745,56 @@ app.get('/stream/*', (req, res) => {
     }
   });
 });
+
+// Files Sonos can't play natively (v0.21.0, see transcoder.js): the URL
+// is /transcode/<library path>.flac. The first request converts the
+// file into the cache (the speaker waits a few seconds); after that, and
+// for anything converted ahead when it was queued, it's an ordinary
+// file send with Range support, so seeking works as usual.
+function transcodeJobForRel(rel) {
+  const abs = localLibrary.resolveSafe(rel);
+  if (!abs || !localLibrary.isAudioFile(abs)) return null;
+  const target = localScanner.getTranscodeTarget(rel);
+  return target ? { abs, rel, target } : null;
+}
+
+transcoder.setUriResolver((uri) => {
+  const m = /\/transcode\/(.+)\.flac(?:\?.*)?$/.exec(uri);
+  if (!m) return null;
+  let rel;
+  try { rel = decodeURIComponent(m[1]); } catch (err) { return null; }
+  return transcodeJobForRel(rel);
+});
+
+app.get('/transcode/*', asyncHandler(async (req, res) => {
+  if (!localLibrary.isEnabled() || !transcoder.isEnabled()) {
+    return res.status(503).json({ error: 'Transcoding is not enabled' });
+  }
+  const raw = req.params[0] || '';
+  if (!raw.endsWith('.flac')) return res.status(404).json({ error: 'Not found' });
+  const rel = raw.slice(0, -'.flac'.length);
+  const job = transcodeJobForRel(rel);
+  if (!job) return res.status(404).json({ error: 'Not found' });
+  let file;
+  try {
+    file = await transcoder.getConverted(job.abs, job.target, rel, true);
+  } catch (err) {
+    debugLog.warn('transcode', `Could not convert "${rel}" for a speaker: ${err.message}`);
+    return res.status(500).json({ error: 'Conversion failed' });
+  }
+  // The speaker may have given up while it converted; the file stays
+  // cached for its retry.
+  if (res.writableEnded || (req.socket && req.socket.destroyed)) return;
+  res.sendFile(file, {
+    dotfiles: 'deny',
+    headers: { 'Content-Type': 'audio/flac' }
+  }, (err) => {
+    if (err && err.code !== 'ECONNABORTED' && err.message !== 'Request aborted') {
+      debugLog.warn('transcode', `Sending converted "${rel}" failed: ${err.message}`);
+    }
+    if (err && !res.headersSent) res.status(500).end();
+  });
+}));
 
 // Extracted embedded covers, cached by the scanner under appdata.
 // Filenames are strictly <sha1>.<ext>, validated here, so there is no
@@ -846,6 +898,9 @@ async function main() {
     .then((urls) => artProxy.warm(urls))
     .catch((err) => debugLog.warn('art', `Art warm-up failed: ${err.message}`));
   localLibrary.logStartupState();
+  // Before the scanner: whether ffmpeg is there decides which files it
+  // indexes.
+  if (localLibrary.isEnabled()) transcoder.init();
   // Plex playlists are matched against the index, so each finished scan
   // (startup, scheduled, manual) re-syncs them -- that's also how the
   // first sync after boot happens.

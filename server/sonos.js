@@ -38,6 +38,7 @@ const localLibrary = require('./localLibrary');
 const localBrowse = require('./localBrowse');
 const localScanner = require('./localScanner');
 const artProxy = require('./artProxy');
+const transcoder = require('./transcoder');
 
 // Manual overrides that are more reliable than guessing at UPnP fields --
 // see getLineInRooms() for why this exists. Missing/invalid config.json
@@ -3191,6 +3192,9 @@ async function selectQueue(device) {
 // (hardware-observed on a 29-track playlist). EnqueueAsNext=0 with
 // position 0 appends whatever the transport is doing.
 async function appendToQueue(device, uri, metadata) {
+  // Local tracks that need converting start converting now, so the
+  // speaker finds them ready (no-op for anything else).
+  transcoder.prewarm(uri);
   return device.avTransportService().AddURIToQueue({
     InstanceID: 0,
     EnqueuedURI: Helpers.EncodeXml(uri),
@@ -3307,6 +3311,7 @@ async function playItemNow(roomName, uri, metadata) {
       return;
     }
 
+    transcoder.prewarm(uri);
     const setUri = () => (metadata ? device.setAVTransportURI({ uri, metadata }) : device.setAVTransportURI(uri));
     try {
       await setUri();
@@ -3609,6 +3614,7 @@ async function addTracksToQueue(roomName, tracks, mode) {
     for (let i = 0; i < list.length; i++) {
       const t = list[i];
       const desired = (mode === 'end' || base === 0) ? 0 : base + 1 + i;
+      transcoder.prewarm(t.uri);
       const res = await device.avTransportService().AddURIToQueue({
         InstanceID: 0,
         EnqueuedURI: Helpers.EncodeXml(t.uri),

@@ -180,7 +180,9 @@ function artUrl(art) {
 }
 
 function trackItem(row) {
-  const uri = localLibrary.buildStreamUri(row.path);
+  // Files Sonos can't play natively get the /transcode/ URL, which
+  // serves a converted FLAC (see transcoder.js).
+  const uri = row.transcode ? localLibrary.buildTranscodeUri(row.path) : localLibrary.buildStreamUri(row.path);
   const albumArtUrl = artUrl(row.art);
   return {
     id: `L:TRACK${SEP}${row.path}`,
@@ -310,7 +312,7 @@ function listAlbums(where, params, start, limit) {
 function listTracks(where, params, orderBy, start, limit) {
   return pagedQuery(
     `SELECT COUNT(*) AS c FROM tracks ${where}`,
-    `SELECT path, title, artist, album, duration_s, mime, art FROM tracks ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
+    `SELECT path, title, artist, album, duration_s, mime, art, transcode FROM tracks ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
     params, start, limit, trackItem
   );
 }
@@ -370,7 +372,7 @@ function listComposers(where, params, start, limit) {
 // scan, then one pass to split out immediate children.
 function folderChildren(relDir, start, limit) {
   const prefix = relDir ? `${relDir}/` : '';
-  const st = prep("SELECT path, title, artist, album, duration_s, mime, art FROM tracks WHERE path >= ? AND path < ? ORDER BY path");
+  const st = prep("SELECT path, title, artist, album, duration_s, mime, art, transcode FROM tracks WHERE path >= ? AND path < ? ORDER BY path");
   const dirs = new Map(); // name -> child rel
   const files = [];
   for (const row of st.iterate(prefix, `${prefix}\uffff`)) {
@@ -437,7 +439,7 @@ function plexPlaylistTracks(id, start, limit) {
   if (!plexTablesExist()) return page([], 0, start);
   return pagedQuery(
     'SELECT COUNT(*) AS c FROM plex_playlist_tracks pt JOIN tracks t ON t.path = pt.path WHERE pt.playlist_id = ?',
-    `SELECT t.path, t.title, t.artist, t.album, t.duration_s, t.mime, t.art
+    `SELECT t.path, t.title, t.artist, t.album, t.duration_s, t.mime, t.art, t.transcode
      FROM plex_playlist_tracks pt JOIN tracks t ON t.path = pt.path
      WHERE pt.playlist_id = ? ORDER BY pt.position LIMIT ? OFFSET ?`,
     [id], start, limit, trackItem
@@ -643,7 +645,7 @@ async function browsePage(containerId, start = 0, limit = PAGE_LIMIT) {
         }));
         const room = 200 - artists.length - albums.length;
         const tracks = prep(
-          "SELECT path, title, artist, album, duration_s, mime, art FROM tracks WHERE (title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\') ORDER BY title COLLATE NOCASE LIMIT ?"
+          "SELECT path, title, artist, album, duration_s, mime, art, transcode FROM tracks WHERE (title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\') ORDER BY title COLLATE NOCASE LIMIT ?"
         ).all(pat, pat, room).map(trackItem);
         const items = [...artists, ...albums, ...tracks];
         return page(items.slice(safeStart, safeStart + safeLimit), items.length, safeStart);
@@ -651,7 +653,7 @@ async function browsePage(containerId, start = 0, limit = PAGE_LIMIT) {
       case 'TRACK': {
         // A single track "container" -- returned as a one-item list so
         // anything that browses an item id still gets something sane.
-        const row = prep('SELECT path, title, artist, album, duration_s, mime, art FROM tracks WHERE path = ?').get(args[0]);
+        const row = prep('SELECT path, title, artist, album, duration_s, mime, art, transcode FROM tracks WHERE path = ?').get(args[0]);
         return page(row ? [trackItem(row)] : [], row ? 1 : 0, safeStart);
       }
       default:

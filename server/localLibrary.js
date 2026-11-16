@@ -57,7 +57,13 @@ const AUDIO_TYPES = {
   '.wav': 'audio/wav',
   '.aif': 'audio/aiff',
   '.aiff': 'audio/aiff',
-  '.wma': 'audio/x-ms-wma'
+  '.wma': 'audio/x-ms-wma',
+  // Never served as-is -- only converted via /transcode/ (v0.21.0).
+  '.opus': 'audio/ogg',
+  '.dsf': 'audio/x-dsf',
+  '.dff': 'audio/x-dff',
+  '.ape': 'audio/x-ape',
+  '.wv': 'audio/x-wavpack'
 };
 
 function isAudioFile(name) {
@@ -202,6 +208,19 @@ function buildStreamUri(relPath) {
     .map((seg) => encodeURIComponent(seg))
     .join('/');
   return `${base}/stream/${encoded}`;
+}
+
+// Same, for a file that needs converting (transcoder.js): served from
+// /transcode/<path>.flac. The .flac ending tells Sonos what it's getting
+// regardless of the source file's own extension.
+function buildTranscodeUri(relPath) {
+  const base = getPublicBaseUrl();
+  if (!base) return null;
+  const encoded = String(relPath)
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+  return `${base}/transcode/${encoded}.flac`;
 }
 
 // Extracted embedded covers (cached under appdata by the scanner) get
@@ -399,6 +418,7 @@ module.exports = {
   resolveSafe,
   getPublicBaseUrl,
   buildStreamUri,
+  buildTranscodeUri,
   describeTrack,
   listDir,
   logStartupState

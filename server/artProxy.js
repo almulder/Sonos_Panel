@@ -172,7 +172,7 @@ function isAllowedGetaaTarget(inner) {
   const s = scheme.toLowerCase();
   if (s === 'http' || s === 'https') {
     const base = localLibrary.getPublicBaseUrl();
-    return !!base && inner.startsWith(`${base}/stream/`);
+    return !!base && (inner.startsWith(`${base}/stream/`) || inner.startsWith(`${base}/transcode/`));
   }
   return s !== 'file' && s !== 'ftp' && s !== 'data' && s !== 'javascript';
 }
@@ -432,12 +432,18 @@ async function localArtFor(key) {
   if (!key.startsWith('/getaa?')) return null;
   const inner = new URLSearchParams(key.slice('/getaa?'.length)).get('u');
   const base = localLibrary.getPublicBaseUrl();
-  if (!inner || !base || !inner.startsWith(`${base}/stream/`)) return null;
+  if (!inner || !base) return null;
+  // /transcode/<path>.flac (v0.21.0) names the same indexed file as
+  // /stream/<path>, minus the added .flac ending.
+  const isTranscode = inner.startsWith(`${base}/transcode/`);
+  if (!isTranscode && !inner.startsWith(`${base}/stream/`)) return null;
   const db = localScanner.getDatabase();
   if (!db || !localLibrary.isEnabled()) return null;
   let rel;
   try {
-    rel = decodeURIComponent(inner.slice(`${base}/stream/`.length).split('?')[0]);
+    const prefix = `${base}${isTranscode ? '/transcode/' : '/stream/'}`;
+    rel = decodeURIComponent(inner.slice(prefix.length).split('?')[0]);
+    if (isTranscode) rel = rel.replace(/\.flac$/, '');
   } catch (err) {
     return null;
   }

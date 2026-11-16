@@ -215,6 +215,18 @@ PoE panel whose CPU is ~13x slower than a laptop):
   copy -- edit playlists in Plex and the panel follows (see
   [Plex playlists](#plex-playlists))
 
+### Updated: v0.21.0 - Nov 16, 2026
+
+- **Hi-res and other unplayable files now play**: files the speakers
+  can't take as-is -- 88.2/96/192 kHz or 32-bit FLAC and ALAC, 24-bit
+  WAV and AIFF, WMA Lossless, Opus, DSD (`.dsf`/`.dff`), APE and
+  WavPack -- are no longer skipped. They're indexed like everything
+  else and converted to FLAC (up to 24-bit/48 kHz on S2, 16-bit on S1)
+  the first time they're played, or as soon as they're queued. The
+  converted copy is cached, so seeking and gapless playback work as
+  normal. Needs ffmpeg, which the Docker image now includes (see
+  [Converting files Sonos can't play](#converting-files-sonos-cant-play))
+
 ## Bug fixes
 
 ### Updated: v0.18.2 - Oct 26, 2026
@@ -554,9 +566,11 @@ address bar. If it doesn't open there, it won't work in the panel
 either -- see
 [Where your music can live](#where-your-music-can-live), especially
 if your music is on another computer or a NAS. If the folder does
-open, the files may be over the format limits -- those are skipped on
-purpose and listed with reasons in `incompatible-files.txt` inside
-your `DATA_DIR` folder.
+open, the files may be over the format limits -- without ffmpeg those
+are skipped on purpose and listed with reasons in
+`incompatible-files.txt` inside your `DATA_DIR` folder. Install ffmpeg
+to have them converted instead (see
+[Converting files Sonos can't play](#converting-files-sonos-cant-play)).
 
 **Music is indexed but won't play through the speakers.** The
 speakers fetch audio from the panel over the network, so they need to
@@ -585,6 +599,8 @@ name in the first column is the environment variable in both cases.
 | `TZ` | `America/Denver` | Timezone for the rescan schedule |
 | `PORT` | `3000` | Port the panel listens on (the Unraid template uses `80`) |
 | `PUBLIC_BASE_URL` | auto | URL the speakers use to stream from the panel. Auto-detected; only set it if local files won't play |
+| `TRANSCODE` | on | Convert files Sonos can't play (hi-res, Opus, DSD...) when played. `off` skips them instead, as before v0.21.0. Needs ffmpeg -- see [Converting files Sonos can't play](#converting-files-sonos-cant-play) |
+| `TRANSCODE_CACHE_GB` | `5` | Disk space for converted files, in the appdata folder. The least recently played are removed first |
 | `PLEX_URL` | (blank) | Your Plex server, e.g. `http://10.1.10.25:32400`. With `PLEX_TOKEN`, shows your Plex playlists in the Local Library -- see [Plex playlists](#plex-playlists) |
 | `PLEX_TOKEN` | (blank) | Your Plex token (X-Plex-Token) |
 | `PLEX_PATH_PREFIX` | auto | The folder Plex sees as the root of your Music Path, e.g. `/data/music`. Only set it if no Plex tracks are matched |
@@ -787,12 +803,41 @@ play:
 | All lossless | max 48 kHz sample rate | max 48 kHz sample rate |
 
 Files over the limits (hi-res 88.2/96/192 kHz FLAC is the common
-case) are **skipped, not added** -- each is listed with its reason in
-`incompatible-files.txt` in the appdata folder, also viewable at
-`/api/local/incompatible`. The panel does **not** convert files;
-transcoding hi-res libraries is out of scope here (a separate
-project). Re-encode those files yourself to 48 kHz / 16- or 24-bit
-and the next scan picks them up.
+case) are **converted when played** -- see below. Without ffmpeg (or
+with `TRANSCODE=off`) they're **skipped** instead, each listed with
+its reason in `incompatible-files.txt` in the appdata folder, also
+viewable at `/api/local/incompatible`. Files that can't be read at
+all are always skipped.
+
+### Converting files Sonos can't play
+
+With ffmpeg available (it's built into the Docker image), files over
+the limits above -- and formats Sonos doesn't play at all: WMA
+Lossless, Opus, DSD (`.dsf`/`.dff`), APE (`.ape`) and WavPack
+(`.wv`) -- appear in the library like any other track. When one is
+played or queued, the panel converts it to FLAC:
+
+- **Bit depth**: 24-bit on S2, 16-bit on S1 (lossy sources like Opus
+  become 16-bit -- there's no more detail in them)
+- **Sample rate**: 44.1 kHz for 88.2/176.4 kHz and DSD sources, 48 kHz
+  for 96/192 kHz -- the clean 2:1 or 4:1 step
+- **Your files are never changed** -- the converted copy goes in the
+  appdata folder (`transcode/`), capped at `TRANSCODE_CACHE_GB`
+  (default 5 GB); the least recently played copies are removed first
+
+A typical song converts in a few seconds. Tracks are converted as soon
+as they're queued, so by the time the speaker reaches them they're
+usually ready; a track played straight away starts after that short
+pause. Once converted, a track seeks and plays gaplessly like any
+other. The container log notes each conversion (`[transcode]`).
+
+Turning transcoding on or off is picked up by the next scan (every
+container start runs one): previously skipped files are re-checked,
+or converted ones are dropped again.
+
+On Windows (no Docker), install ffmpeg and make sure `ffmpeg` runs
+from a Command Prompt, or set `FFMPEG_PATH` to the full path of
+`ffmpeg.exe`.
 
 ### The scanner
 
@@ -862,7 +907,6 @@ official logos from Sonos's support site in one run.
   favorites, on the right account, forever after
 - Alarms, TruePlay tuning, stereo-pair/surround setup, firmware
   updates, voice -- system-administration jobs for the official app
-- Convert incompatible files (see above -- separate project)
 - Mix S1 and S2 in one container (two containers covers it)
 
 ## How it's built

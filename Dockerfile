@@ -8,8 +8,10 @@ FROM node:22-slim
 # tzdata so the TZ env actually works -- the Local Music Library's
 # scheduled rescans (RESCAN_SCHEDULE) are evaluated in local time, and
 # without zoneinfo files "daily@03:30" would silently mean 03:30 UTC.
+# ffmpeg converts files Sonos can't play (hi-res, Opus, DSD...) when
+# they're played -- see server/transcoder.js.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata \
+    && apt-get install -y --no-install-recommends tzdata ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -62,6 +64,10 @@ ENV PUBLIC_BASE_URL=""
 # (days mon-sun), evaluated in TZ. Blank = rescan only at container
 # start (which always happens when a Music Path is mounted).
 ENV RESCAN_SCHEDULE=""
+# Converting files Sonos can't play (needs ffmpeg, installed above).
+# TRANSCODE=off skips them instead; the cache lives under DATA_DIR.
+ENV TRANSCODE=""
+ENV TRANSCODE_CACHE_GB=5
 # Plex playlists (optional, needs MUSIC_DIR): see README -> Plex playlists.
 ENV PLEX_URL=""
 ENV PLEX_TOKEN=""
