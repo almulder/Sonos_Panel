@@ -229,6 +229,13 @@ PoE panel whose CPU is ~13x slower than a laptop):
 
 ## Bug fixes
 
+### Updated: v0.21.1 - Nov 18, 2026
+
+- **Plex libraries with several folders**: a Plex music library that
+  spans more than one folder no longer flips between them and logs
+  each flip. Every matching folder is remembered, and
+  `PLEX_PATH_PREFIX` now accepts several folders separated by `;`
+
 ### Updated: v0.18.2 - Oct 26, 2026
 
 - **The Play button follows a song you start from a playlist or the
