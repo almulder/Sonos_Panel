@@ -128,6 +128,12 @@ function findFolderArt(relDir) {
       }
     } catch (err) { /* unreadable dir -> just no art */ }
   }
+  // Multi-disc albums keep their songs in "CD 01" / "Disc 2" folders,
+  // often with only a discart.jpg there -- the cover is in the album
+  // folder above.
+  if (!found && key.includes('/') && /^(cd|dis[ck])\s*\d+/i.test(path.posix.basename(key))) {
+    found = findFolderArt(path.posix.dirname(key));
+  }
   folderArtCache.set(key, found);
   return found;
 }

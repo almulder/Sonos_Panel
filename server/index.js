@@ -404,6 +404,16 @@ app.get('/api/sonos/room/:room/source-groups', asyncHandler(async (req, res) => 
   if (localBrowse.available()) {
     groups.unshift({ id: 'locallibrary', title: 'Local Library', browsable: true, isLocalLibraryRoot: true });
   }
+  // Plex playlists get their own source, right after Local Playlists.
+  let plexCount = 0;
+  try {
+    if (plexPlaylists.isEnabled()) plexCount = localBrowse.listPlexPlaylists(undefined, 0, 1).total;
+  } catch (err) { /* no Plex tables yet */ }
+  if (plexCount > 0) {
+    const at = groups.findIndex((g) => g.isPlaylistRoot);
+    groups.splice(at >= 0 ? at + 1 : groups.length, 0,
+      { id: 'L:PLEXPLAYLISTS', title: 'Plex', browsable: true, isPlexPlaylistsRoot: true });
+  }
   res.json({ groups });
 }));
 
@@ -508,20 +518,16 @@ app.post('/api/sonos/room/:room/save-queue', asyncHandler(async (req, res) => {
 }));
 
 // ---------------- Local Playlists ----------------
-// The panel's own playlists (localPlaylists.js). The Playlists screen
-// also lists Plex playlists and any Sonos playlists still on the
-// speakers, each in its own section.
+// The panel's own playlists (localPlaylists.js). The Local Playlists
+// screen also lists any Sonos playlists still on the speakers; Plex
+// playlists have their own "Plex" source.
 app.get('/api/playlists', asyncHandler(async (req, res) => {
   const local = localPlaylists.list();
-  let plex = [];
-  try {
-    if (plexPlaylists.isEnabled()) plex = localBrowse.listPlexPlaylists(undefined, 0, 1000).items;
-  } catch (err) { /* no Plex tables yet */ }
   let sonosLists = [];
   if (req.query.room) {
     try { sonosLists = await sonos.getPlaylists(req.query.room); } catch (err) { /* speakers busy -- skip */ }
   }
-  res.json({ enabled: localPlaylists.isEnabled(), local, plex, sonos: sonosLists });
+  res.json({ enabled: localPlaylists.isEnabled(), local, sonos: sonosLists });
 }));
 
 app.post('/api/playlists', asyncHandler(async (req, res) => {

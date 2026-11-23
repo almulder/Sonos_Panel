@@ -228,6 +228,17 @@ PoE panel whose CPU is ~13x slower than a laptop):
   normal. Needs ffmpeg, which the Docker image now includes (see
   [Converting files Sonos can't play](#converting-files-sonos-cant-play))
 
+### Updated: v0.23.1 - Nov 22, 2026
+
+- **Plex source**: Plex playlists have their own **Plex** row (with
+  the Plex icon) in Sources, right under Local Playlists. It opens the
+  same list as Local Library -> Plex Playlists, with search, Play /
+  Shuffle and **+** to copy a Plex playlist into a Local Playlist
+- **Covers for multi-disc albums**: songs in "CD 01" / "Disc 2"
+  folders now use the album's cover from the folder above when their
+  own folder has none (often just a `discart.jpg`). Run a library
+  rescan once to pick these up
+
 ### Updated: v0.23.0 - Nov 22, 2026
 
 - **Local Playlists**: the panel now has its own playlists, stored on
@@ -235,10 +246,9 @@ PoE panel whose CPU is ~13x slower than a laptop):
   library index so a rescan or rebuilt index never touches them).
   Sonos keeps its playlists on the speakers in a small store that
   fills up at a few thousand songs; Local Playlists have no limit.
-  The **Local Playlists** source shows three sections: your Local
-  Playlists (with **+ New playlist**, and a pencil on each to rename
-  or delete), your **Plex Playlists**, and any Sonos playlists still on
-  the speakers. Every **+ / Add to playlist** button, **New playlist**
+  The **Local Playlists** source holds your Local Playlists (with
+  **+ New playlist**, and a pencil on each to rename or delete), plus
+  any Sonos playlists still on the speakers in their own section. Every **+ / Add to playlist** button, **New playlist**
   and **Save queue as playlist** now makes or fills a Local Playlist.
   Songs in a Local Playlist have an **x** to take them out. Playlists
   open with **Play** / **Shuffle** and **Load more**, and tapping a song

@@ -172,6 +172,9 @@ function buildSourceIcon(group) {
   if (group.isPlaylistRoot) {
     return buildImgIconWithFallback('source-playlist');
   }
+  if (group.isPlexPlaylistsRoot) {
+    return buildImgIconWithFallback('plex');
+  }
   return buildImgIconWithFallback(iconFilenameForService(group.title));
 }
 
@@ -1692,14 +1695,14 @@ const SonosView = (() => {
       if (group.isLineInRoot) continue; // no artwork to prefetch
       // Music Library is browsed on demand and can be enormous -- never
       // prefetch it, that would mean walking a huge tree at startup.
-      if (group.isMusicLibraryRoot || group.isLocalLibraryRoot) continue;
+      if (group.isMusicLibraryRoot || group.isLocalLibraryRoot || group.isPlexPlaylistsRoot) continue;
       try {
         let items = [];
         if (group.isPlaylistRoot) {
           // Just the playlists' own covers -- walking every playlist's
           // songs (Plex's "All Music" is 350,000) is far too much.
           const data = await api(`/api/playlists?room=${encodeURIComponent(focusedRoom)}`);
-          items = [...(data.local || []), ...(data.plex || []), ...(data.sonos || [])];
+          items = [...(data.local || []), ...(data.sonos || [])];
         } else {
           const data = await api(
             `/api/sonos/room/${encodeURIComponent(focusedRoom)}/favorites-by-group?group=${encodeURIComponent(group.title)}`
@@ -1741,6 +1744,12 @@ const SonosView = (() => {
       return;
     }
 
+    if (group.isPlexPlaylistsRoot) {
+      // Same list as Local Library -> Plex Playlists, one tap from Sources.
+      await showLibraryContainer('L:PLEXPLAYLISTS', 'Plex', 'L:PLEXPLAYLISTS');
+      return;
+    }
+
     if (group.isLocalLibraryRoot) {
       currentGroup = 'Network Music Library';
       sourcePanelTitle.textContent = 'Network Music Library';
@@ -1777,11 +1786,11 @@ const SonosView = (() => {
     renderLeafItems(data.items || [], 'Nothing here.');
   }
 
-  // The Local Playlists screen: the panel's own playlists first (with a
-  // "New playlist" row and a pencil on each for rename/delete), then
-  // Plex's playlists, then any Sonos playlists still on the speakers.
-  // Local and Plex playlists open in the paged library browser, so big
-  // ones get Load more, Play/Shuffle and next/previous.
+  // The Local Playlists screen: the panel's own playlists (with a "New
+  // playlist" row and a pencil on each for rename/delete), then any
+  // Sonos playlists still on the speakers. Plex playlists have their
+  // own "Plex" source. Local Playlists open in the paged library
+  // browser, so big ones get Load more, Play/Shuffle and next/previous.
   const PLAYLIST_ROOT_GROUP = { id: 'L:LOCALPLAYLISTS', title: 'Local Playlists', browsable: true, isPlaylistRoot: true };
   const openPlaylistRoot = () => openGroup(PLAYLIST_ROOT_GROUP);
 
@@ -1956,7 +1965,6 @@ const SonosView = (() => {
   function renderPlaylistsScreen(data) {
     sourcePanelItems.innerHTML = '';
     const local = data.local || [];
-    const plex = data.plex || [];
     const sonosLists = data.sonos || [];
 
     const openInLibrary = (item, categoryId) => () => {
@@ -1982,17 +1990,6 @@ const SonosView = (() => {
         sourcePanelItems.insertAdjacentHTML('beforeend',
           '<li class="sourcepanel__loading">No playlists yet. Use + on any song, album or playlist to add it to one.</li>');
       }
-    }
-
-    if (plex.length > 0) {
-      sourcePanelItems.appendChild(playlistSectionHeader('Plex Playlists', iconFilenameForService('Plex')));
-      plex.forEach((item) => {
-        sourcePanelItems.appendChild(buildPlaylistRow(item, {
-          queueable: true,
-          addable: true,
-          onOpen: openInLibrary(item, 'L:PLEXPLAYLISTS')
-        }));
-      });
     }
 
     // Sonos playlists stored on the speakers -- still listed (and
