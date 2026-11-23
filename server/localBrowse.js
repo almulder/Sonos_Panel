@@ -29,6 +29,8 @@
 //   L:PLEXPLAYLISTS / :term     playlists mirrored from Plex (v0.20.0,
 //                               see plexPlaylists.js)
 //   L:PLEXPLAYLIST<SEP>id       one Plex playlist's matched tracks
+//   L:LOCALPLAYLISTS            the panel's own playlists (localPlaylists.js)
+//   L:LOCALPLAYLIST<SEP>id      one Local Playlist's songs
 //
 // Every leaf track item carries a ready-made DIDL `metadata` string
 // (with <res duration>), so whichever play path picks it up hands the
@@ -38,6 +40,7 @@ const path = require('path');
 const debugLog = require('./debugLog');
 const localLibrary = require('./localLibrary');
 const localScanner = require('./localScanner');
+const localPlaylists = require('./localPlaylists');
 
 const SEP = '\u001f';
 // Indexes bigger than this split into A-Z/# letter buckets instead of a
@@ -450,6 +453,7 @@ function plexPlaylistTracks(id, start, limit) {
 // ID parsing + dispatch
 // ---------------------------------------------------------------------
 const CATEGORY_TOKENS = [
+  'LOCALPLAYLISTS', 'LOCALPLAYLIST',
   'PLEXPLAYLISTS', 'PLEXPLAYLIST',
   'ARTISTTRACKS', 'GENRETRACKS', 'RECENT', 'ALL',
   'ARTISTS', 'ALBUMS', 'TRACKS', 'GENRES', 'COMPOSERS', 'FOLDERS',
@@ -619,6 +623,18 @@ async function browsePage(containerId, start = 0, limit = PAGE_LIMIT) {
         return folderChildren(args[0], safeStart, safeLimit);
       case 'PLEXPLAYLISTS':
         return listPlexPlaylists(search, safeStart, safeLimit);
+      case 'LOCALPLAYLISTS': {
+        let lists = localPlaylists.list();
+        if (search !== undefined) {
+          const term = String(search).toLowerCase();
+          lists = lists.filter((p) => p.title.toLowerCase().includes(term));
+        }
+        return page(lists.slice(safeStart, safeStart + safeLimit), lists.length, safeStart);
+      }
+      case 'LOCALPLAYLIST': {
+        const r = localPlaylists.tracksPage(args[0], safeStart, safeLimit);
+        return page(r.items, r.total, safeStart);
+      }
       case 'PLEXPLAYLIST':
         return plexPlaylistTracks(args[0], safeStart, safeLimit);
       case 'RECENT':
@@ -667,6 +683,9 @@ async function browsePage(containerId, start = 0, limit = PAGE_LIMIT) {
 
 module.exports = {
   browsePage,
+  listPlexPlaylists,
+  trackItem,
+  artUrl,
   flattenContainerId,
   getCategories,
   available,

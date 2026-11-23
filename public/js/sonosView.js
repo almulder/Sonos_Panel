@@ -1696,14 +1696,10 @@ const SonosView = (() => {
       try {
         let items = [];
         if (group.isPlaylistRoot) {
-          const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/playlists`);
-          const playlists = data.items || [];
-          items = playlists.slice();
-          for (const pl of playlists) {
-            const d = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(pl.id)}`)
-              .catch(() => ({}));
-            items.push(...(d.items || []));
-          }
+          // Just the playlists' own covers -- walking every playlist's
+          // songs (Plex's "All Music" is 350,000) is far too much.
+          const data = await api(`/api/playlists?room=${encodeURIComponent(focusedRoom)}`);
+          items = [...(data.local || []), ...(data.plex || []), ...(data.sonos || [])];
         } else {
           const data = await api(
             `/api/sonos/room/${encodeURIComponent(focusedRoom)}/favorites-by-group?group=${encodeURIComponent(group.title)}`
@@ -1764,11 +1760,11 @@ const SonosView = (() => {
     }
 
     if (group.isPlaylistRoot) {
-      currentGroup = 'Playlists';
-      sourcePanelTitle.textContent = 'Playlists';
+      currentGroup = 'Local Playlists';
+      sourcePanelTitle.textContent = 'Local Playlists';
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
-      const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/playlists`);
-      renderPlaylistItems(data.items || [], 'No playlists found.');
+      const data = await api(`/api/playlists?room=${encodeURIComponent(focusedRoom)}`);
+      renderPlaylistsScreen(data || {});
       return;
     }
 
@@ -1781,135 +1777,245 @@ const SonosView = (() => {
     renderLeafItems(data.items || [], 'Nothing here.');
   }
 
-  // Each playlist shows the icon for whichever service its tracks
-  // actually came from (determined server-side by peeking its first
-  // track, since a playlist container itself carries no service label
-  // -- confirmed via real data). Playlists themselves are containers
-  // needing one more level of drill-down to their individual tracks.
-  function renderPlaylistItems(items, emptyMessage) {
-    sourcePanelItems.innerHTML = '';
-    if (items.length === 0) {
-      sourcePanelItems.innerHTML = `<li class="sourcepanel__loading">${emptyMessage}</li>`;
-      return;
+  // The Local Playlists screen: the panel's own playlists first (with a
+  // "New playlist" row and a pencil on each for rename/delete), then
+  // Plex's playlists, then any Sonos playlists still on the speakers.
+  // Local and Plex playlists open in the paged library browser, so big
+  // ones get Load more, Play/Shuffle and next/previous.
+  const PLAYLIST_ROOT_GROUP = { id: 'L:LOCALPLAYLISTS', title: 'Local Playlists', browsable: true, isPlaylistRoot: true };
+  const openPlaylistRoot = () => openGroup(PLAYLIST_ROOT_GROUP);
+
+  function playlistSectionHeader(text, icon) {
+    const header = document.createElement('li');
+    header.className = 'sourcepanel__groupheader';
+    header.appendChild(buildImgIconWithFallback(icon));
+    const headerLabel = document.createElement('span');
+    headerLabel.textContent = text;
+    header.appendChild(headerLabel);
+    return header;
+  }
+
+  function playlistArt(item) {
+    const art = document.createElement('div');
+    art.className = 'sourcepanel__art';
+    if (item.albumArtUrl) {
+      art.style.backgroundImage = `url("${item.albumArtUrl}")`;
+      art.style.backgroundSize = 'cover';
+    } else {
+      art.classList.add('sourcepanel__art--letter');
+      const first = (item.title || '').trim().charAt(0).toUpperCase();
+      art.textContent = /[A-Z0-9]/.test(first) ? first : '#';
     }
+    return art;
+  }
 
-    // Grouped by service with section headers, e.g. all Plex playlists
-    // under one "PLEX" header -- a visual grouping within a single
-    // scrollable list, not an extra navigation level (tapping a
-    // playlist still drills straight to its tracks, same as before).
-    const groups = new Map();
-    items.forEach((item) => {
-      const key = item.serviceLabel || 'Other';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(item);
-    });
-    const sortedKeys = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b));
-
-    sortedKeys.forEach((serviceLabel) => {
-      const header = document.createElement('li');
-      header.className = 'sourcepanel__groupheader';
-      header.appendChild(buildImgIconWithFallback(iconFilenameForService(serviceLabel)));
-      const headerLabel = document.createElement('span');
-      headerLabel.textContent = displayService(serviceLabel);
-      header.appendChild(headerLabel);
-      sourcePanelItems.appendChild(header);
-
-      groups.get(serviceLabel).forEach((item) => {
-        const li = document.createElement('li');
-        li.className = 'sourcepanel__item sourcepanel__item--grouped';
-        markInUse(li, item);
-
-        const labelBlock = document.createElement('div');
-        labelBlock.className = 'sourcepanel__labelblock';
-        const label = document.createElement('span');
-        label.className = 'sourcepanel__label';
-        label.textContent = item.title;
-        labelBlock.appendChild(label);
-        li.appendChild(labelBlock);
-
-        // One pencil on the playlist's own row (same pattern as renaming a
-        // service account). Editing offers Save / Cancel / Delete, and
-        // Delete asks for confirmation. Behind the passcode lock.
-        const openPlaylistRoot = () => openGroup({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true });
-        const renameBtn = document.createElement('button');
-        renameBtn.className = 'sourcepanel__removebtn';
-        renameBtn.textContent = '\u270F\uFE0F';
-        renameBtn.setAttribute('aria-label', `Rename ${item.title}`);
-
-        renameBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          window.PasscodeLock.require(() => {
-            // Inline swap: the name becomes an input + Save/Cancel.
-            labelBlock.innerHTML = '';
-            li.classList.add('sourcepanel__renamerow');
-            renameBtn.style.display = 'none';
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'sourcepanel__renameinput';
-            input.value = item.title;
-            input.addEventListener('click', (e2) => e2.stopPropagation());
-            const save = document.createElement('button');
-            save.className = 'sourcepanel__actionbtn sourcepanel__actionbtn--primary';
-            save.textContent = 'Save';
-            save.addEventListener('click', async (e2) => {
-              e2.stopPropagation();
-              const next = input.value.trim();
-              if (!next) return;
-              if (next === item.title) { await openPlaylistRoot(); return; }
-              save.textContent = '\u2026';
-              await api(`/api/sonos/playlists/${encodeURIComponent(item.id)}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: next, currentTitle: item.title })
-              });
-              await openPlaylistRoot();
-            });
-            const cancel = document.createElement('button');
-            cancel.className = 'sourcepanel__actionbtn';
-            cancel.textContent = 'Cancel';
-            cancel.addEventListener('click', async (e2) => {
-              e2.stopPropagation();
-              await openPlaylistRoot();
-            });
-            const del = document.createElement('button');
-            del.className = 'sourcepanel__actionbtn sourcepanel__actionbtn--danger';
-            del.textContent = 'Delete';
-            del.addEventListener('click', (e2) => {
-              e2.stopPropagation();
-              showConfirm(`Are you sure you want to delete "${item.title}"?`, async () => {
-                await api(`/api/sonos/playlists/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
-                await openPlaylistRoot();
-              });
-            });
-            labelBlock.appendChild(input);
-            labelBlock.appendChild(save);
-            labelBlock.appendChild(cancel);
-            labelBlock.appendChild(del);
-            input.focus();
-            input.select();
+  // Pencil -> inline Save / Cancel / Delete. `base` is the API path for
+  // this kind of playlist (/api/playlists or /api/sonos/playlists).
+  function buildPlaylistEditButton(li, labelBlock, item, base) {
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'sourcepanel__removebtn';
+    renameBtn.textContent = '✏️';
+    renameBtn.setAttribute('aria-label', `Rename ${item.title}`);
+    renameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.PasscodeLock.require(() => {
+        labelBlock.innerHTML = '';
+        li.classList.add('sourcepanel__renamerow');
+        renameBtn.style.display = 'none';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'sourcepanel__renameinput';
+        input.value = item.title;
+        input.addEventListener('click', (e2) => e2.stopPropagation());
+        const save = document.createElement('button');
+        save.className = 'sourcepanel__actionbtn sourcepanel__actionbtn--primary';
+        save.textContent = 'Save';
+        save.addEventListener('click', async (e2) => {
+          e2.stopPropagation();
+          const next = input.value.trim();
+          if (!next) return;
+          if (next === item.title) { await openPlaylistRoot(); return; }
+          save.textContent = '…';
+          await api(`${base}/${encodeURIComponent(item.id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: next, currentTitle: item.title })
+          });
+          await openPlaylistRoot();
+        });
+        const cancel = document.createElement('button');
+        cancel.className = 'sourcepanel__actionbtn';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', async (e2) => {
+          e2.stopPropagation();
+          await openPlaylistRoot();
+        });
+        const del = document.createElement('button');
+        del.className = 'sourcepanel__actionbtn sourcepanel__actionbtn--danger';
+        del.textContent = 'Delete';
+        del.addEventListener('click', (e2) => {
+          e2.stopPropagation();
+          showConfirm(`Are you sure you want to delete "${item.title}"?`, async () => {
+            await api(`${base}/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+            await openPlaylistRoot();
           });
         });
-        li.appendChild(renameBtn);
-
-        const chevron = document.createElement('span');
-        chevron.className = 'sourcepanel__chevron';
-        chevron.textContent = '\u203A';
-        li.appendChild(chevron);
-
-        li.addEventListener('click', async () => {
-          backStack.push(() => openGroup({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true }));
-          updateBackButtonVisibility();
-          sourcePanelTitle.textContent = item.title;
-          sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading\u2026</li>';
-          const data = await api(
-            `/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(item.id)}`
-          );
-          renderLeafItems(data.items || [], 'Nothing here.', item.id, item.title);
-        });
-
-        sourcePanelItems.appendChild(li);
+        labelBlock.appendChild(input);
+        labelBlock.appendChild(save);
+        labelBlock.appendChild(cancel);
+        labelBlock.appendChild(del);
+        input.focus();
+        input.select();
       });
     });
+    return renameBtn;
+  }
+
+  function buildPlaylistRow(item, opts) {
+    const li = document.createElement('li');
+    li.className = 'sourcepanel__item sourcepanel__item--grouped';
+    markInUse(li, item);
+    li.appendChild(playlistArt(item));
+    const labelBlock = document.createElement('div');
+    labelBlock.className = 'sourcepanel__labelblock';
+    const label = document.createElement('span');
+    label.className = 'sourcepanel__label';
+    label.textContent = item.title;
+    labelBlock.appendChild(label);
+    if (item.artist) {
+      const sub = document.createElement('span');
+      sub.className = 'sourcepanel__servicelabel';
+      sub.textContent = item.artist;
+      labelBlock.appendChild(sub);
+    }
+    li.appendChild(labelBlock);
+    if (opts.queueable) li.appendChild(buildQueueButton(item.title, { containerId: item.id }));
+    if (opts.addable) li.appendChild(buildAddToPlaylistButton(item.title, { containerId: item.id }));
+    if (opts.editBase) li.appendChild(buildPlaylistEditButton(li, labelBlock, item, opts.editBase));
+    const chevron = document.createElement('span');
+    chevron.className = 'sourcepanel__chevron';
+    chevron.textContent = '›';
+    li.appendChild(chevron);
+    li.addEventListener('click', opts.onOpen);
+    return li;
+  }
+
+  function buildNewPlaylistRow() {
+    const li = document.createElement('li');
+    li.className = 'sourcepanel__item sourcepanel__item--grouped';
+    const labelBlock = document.createElement('div');
+    labelBlock.className = 'sourcepanel__labelblock';
+    const label = document.createElement('span');
+    label.className = 'sourcepanel__label';
+    label.textContent = '+  New playlist…';
+    labelBlock.appendChild(label);
+    li.appendChild(labelBlock);
+    li.addEventListener('click', () => {
+      window.PasscodeLock.require(() => {
+        if (li.classList.contains('sourcepanel__renamerow')) return;
+        labelBlock.innerHTML = '';
+        li.classList.add('sourcepanel__renamerow');
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'sourcepanel__renameinput';
+        input.placeholder = 'Playlist name';
+        input.addEventListener('click', (e2) => e2.stopPropagation());
+        const save = document.createElement('button');
+        save.className = 'sourcepanel__actionbtn sourcepanel__actionbtn--primary';
+        save.textContent = 'Create';
+        const go = async (e2) => {
+          if (e2) e2.stopPropagation();
+          const name = input.value.trim();
+          if (!name) return;
+          save.textContent = '…';
+          await api('/api/playlists', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: name })
+          });
+          await openPlaylistRoot();
+        };
+        save.addEventListener('click', go);
+        input.addEventListener('keydown', (e2) => { if (e2.key === 'Enter') go(e2); });
+        const cancel = document.createElement('button');
+        cancel.className = 'sourcepanel__actionbtn';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', async (e2) => {
+          e2.stopPropagation();
+          await openPlaylistRoot();
+        });
+        labelBlock.appendChild(input);
+        labelBlock.appendChild(save);
+        labelBlock.appendChild(cancel);
+        input.focus();
+      });
+    });
+    return li;
+  }
+
+  function renderPlaylistsScreen(data) {
+    sourcePanelItems.innerHTML = '';
+    const local = data.local || [];
+    const plex = data.plex || [];
+    const sonosLists = data.sonos || [];
+
+    const openInLibrary = (item, categoryId) => () => {
+      backStack.push(openPlaylistRoot);
+      updateBackButtonVisibility();
+      showLibraryContainer(item.id, item.title, categoryId);
+    };
+
+    sourcePanelItems.appendChild(playlistSectionHeader('Local Playlists', 'source-playlist'));
+    if (data.enabled === false) {
+      sourcePanelItems.insertAdjacentHTML('beforeend',
+        '<li class="sourcepanel__loading">Local Playlists need the Local Music Library (map "Music Path" in the template).</li>');
+    } else {
+      sourcePanelItems.appendChild(buildNewPlaylistRow());
+      local.forEach((item) => {
+        sourcePanelItems.appendChild(buildPlaylistRow(item, {
+          queueable: true,
+          editBase: '/api/playlists',
+          onOpen: openInLibrary(item, 'L:LOCALPLAYLISTS')
+        }));
+      });
+      if (local.length === 0) {
+        sourcePanelItems.insertAdjacentHTML('beforeend',
+          '<li class="sourcepanel__loading">No playlists yet. Use + on any song, album or playlist to add it to one.</li>');
+      }
+    }
+
+    if (plex.length > 0) {
+      sourcePanelItems.appendChild(playlistSectionHeader('Plex Playlists', iconFilenameForService('Plex')));
+      plex.forEach((item) => {
+        sourcePanelItems.appendChild(buildPlaylistRow(item, {
+          queueable: true,
+          addable: true,
+          onOpen: openInLibrary(item, 'L:PLEXPLAYLISTS')
+        }));
+      });
+    }
+
+    // Sonos playlists stored on the speakers -- still listed (and
+    // deletable) so nothing disappears unseen, but new playlists are
+    // always Local Playlists.
+    if (sonosLists.length > 0) {
+      sourcePanelItems.appendChild(playlistSectionHeader('Sonos Playlists (on the speakers)', 'source-playlist'));
+      sonosLists.forEach((item) => {
+        sourcePanelItems.appendChild(buildPlaylistRow(item, {
+          editBase: '/api/sonos/playlists',
+          onOpen: async () => {
+            backStack.push(openPlaylistRoot);
+            updateBackButtonVisibility();
+            sourcePanelTitle.textContent = item.title;
+            sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Loading…</li>';
+            const d = await api(
+              `/api/sonos/room/${encodeURIComponent(focusedRoom)}/browse-container?id=${encodeURIComponent(item.id)}`
+            );
+            renderLeafItems(d.items || [], 'Nothing here.', item.id, item.title);
+          }
+        }));
+      });
+    }
   }
 
   function showPreviewMessage(text) {
@@ -1985,7 +2091,7 @@ const SonosView = (() => {
     if (!item) return;
     if (item.isPlaylistRoot) {
       li.dataset.inuseRoot = 'playlists';
-    } else if (item.id && /^SQ:\d+/.test(String(item.id)) && item.browsable) {
+    } else if (item.id && /^(SQ:\d+|L:(LOCAL|PLEX)PLAYLIST\u001f)/.test(String(item.id)) && item.browsable) {
       li.dataset.inusePlaylist = String(item.id);
     } else if (item.isAccountEntry) {
       li.dataset.inuseGroup = item.serviceLabel || '';
@@ -2082,13 +2188,17 @@ const SonosView = (() => {
     // NOTE: this route responds with { items }, not { playlists } --
     // reading the wrong key here was why the picker always showed an
     // empty list.
-    const data = await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/playlists`);
-    const playlists = data.items || [];
+    const data = await api('/api/playlists');
+    const playlists = data.local || [];
     list.innerHTML = '';
+    if (data.enabled === false) {
+      list.innerHTML = '<div class="savegroup-checking">Local Playlists need the Local Music Library.</div>';
+      return;
+    }
 
     async function addTo(playlistId) {
       status.textContent = 'Adding\u2026';
-      const result = await api(`/api/sonos/playlists/${encodeURIComponent(playlistId)}/add`, {
+      const result = await api(`/api/playlists/${encodeURIComponent(playlistId)}/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...payload, label, room: focusedRoom })
@@ -2106,10 +2216,10 @@ const SonosView = (() => {
       }
       // A container add reports per-track results, since some tracks
       // can fail individually (see addContainerToPlaylist server-side).
-      if (typeof result.failed !== 'undefined' && Array.isArray(result.failed) && result.failed.length > 0) {
-        status.textContent = `Added ${result.added}, ${result.failed.length} failed`;
+      if (result && result.skipped > 0) {
+        status.textContent = `Added ${result.added}, ${result.skipped} skipped`;
       } else {
-        status.textContent = 'Added.';
+        status.textContent = result && result.added > 1 ? `Added ${result.added.toLocaleString()} songs.` : 'Added.';
       }
       setTimeout(() => { overlay.style.display = 'none'; }, 900);
     }
@@ -2134,7 +2244,7 @@ const SonosView = (() => {
         const name = input.value.trim();
         if (!name) return;
         status.textContent = 'Creating\u2026';
-        const created = await api('/api/sonos/playlists', {
+        const created = await api('/api/playlists', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: name })
@@ -2333,7 +2443,7 @@ const SonosView = (() => {
     if (/^A:(ALBUM|ARTIST|GENRE|COMPOSER)\//.test(v)) return true;
     if (v.startsWith('L:')) {
       const token = v.slice(2).split(LOCAL_SEP)[0].split(':')[0];
-      return ['ALBUM', 'ARTIST', 'ARTISTTRACKS', 'GENRE', 'GENRETRACKS', 'RECENT', 'PLEXPLAYLIST'].includes(token);
+      return ['ALBUM', 'ARTIST', 'ARTISTTRACKS', 'GENRE', 'GENRETRACKS', 'RECENT', 'PLEXPLAYLIST', 'LOCALPLAYLIST'].includes(token);
     }
     return false;
   }
@@ -2393,29 +2503,6 @@ const SonosView = (() => {
     return li;
   }
 
-  // Plex Playlists root: one button that copies every Plex playlist into
-  // Sonos Playlists (and keeps them topped up after each Plex sync).
-  function buildPlexCopyRow() {
-    const li = document.createElement('li');
-    li.className = 'sourcepanel__actions';
-    const btn = document.createElement('button');
-    btn.className = 'sourcepanel__actionbtn';
-    btn.textContent = 'Copy all to Sonos Playlists';
-    const note = document.createElement('span');
-    note.className = 'sourcepanel__servicelabel';
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      btn.disabled = true;
-      const r = await api('/api/local/plex-to-sonos', { method: 'POST' });
-      note.textContent = r && r.ok
-        ? (r.running ? ' Already copying — see the log for progress.' : ' Copying in the background — kept up to date after each Plex sync.')
-        : ` Couldn't start: ${(r && r.error) || 'unknown error'}`;
-    });
-    li.appendChild(btn);
-    li.appendChild(note);
-    return li;
-  }
-
   function renderLibraryItems(state) {
     sourcePanelItems.innerHTML = '';
     // Category roots (Artists, Albums...) are navigational, not playable
@@ -2423,9 +2510,6 @@ const SonosView = (() => {
     // track list worth a Play/Shuffle of its own.
     if (isPlayableContainer(state.containerId) && (state.containerId !== state.categoryId || state.containerId === 'L:RECENT')) {
       sourcePanelItems.appendChild(buildContainerActionsRow(state));
-    }
-    if (state.containerId === 'L:PLEXPLAYLISTS') {
-      sourcePanelItems.appendChild(buildPlexCopyRow());
     }
     if (state.items.length === 0) {
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Nothing here.</li>';
@@ -2482,7 +2566,7 @@ const SonosView = (() => {
         // isn't a meaningful action.
         // Plex Playlists is the exception the other way: its rows ARE
         // playlists, so queue/add-to-playlist make sense right there.
-        if (state.categoryId !== state.containerId || state.categoryId === 'A:ALBUM' || state.categoryId === 'L:PLEXPLAYLISTS') {
+        if (state.categoryId !== state.containerId || state.categoryId === 'A:ALBUM' || state.categoryId === 'L:PLEXPLAYLISTS' || state.categoryId === 'L:LOCALPLAYLISTS') {
           li.appendChild(buildQueueButton(item.title, { containerId: item.id }));
           li.appendChild(buildAddToPlaylistButton(item.title, { containerId: item.id }));
         }
@@ -2509,6 +2593,22 @@ const SonosView = (() => {
         });
         li.appendChild(buildQueueButton(item.title, { uri: item.uri, metadata: item.metadata }));
         li.appendChild(buildAddToPlaylistButton(item.title, { uri: item.uri, metadata: item.metadata }));
+        // Songs in a Local Playlist can be taken out of it.
+        if (String(state.containerId).startsWith(`L:LOCALPLAYLIST${LOCAL_SEP}`)) {
+          const removeBtn = document.createElement('button');
+          removeBtn.className = 'sourcepanel__removebtn';
+          removeBtn.textContent = '\u2715';
+          removeBtn.setAttribute('aria-label', `Remove ${item.title} from ${state.title}`);
+          removeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.PasscodeLock.require(async () => {
+              removeBtn.textContent = '\u2026';
+              await api(`/api/playlists/${encodeURIComponent(state.containerId)}/track/${itemIndex}`, { method: 'DELETE' });
+              await showLibraryContainer(state.containerId, state.title, state.categoryId);
+            });
+          });
+          li.appendChild(removeBtn);
+        }
       }
 
       sourcePanelItems.appendChild(li);

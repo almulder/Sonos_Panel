@@ -13,6 +13,7 @@ const localLibrary = require('./localLibrary');
 const localScanner = require('./localScanner');
 const localBrowse = require('./localBrowse');
 const plexPlaylists = require('./plexPlaylists');
+const localPlaylists = require('./localPlaylists');
 const transcoder = require('./transcoder');
 const artProxy = require('./artProxy');
 const debugLog = require('./debugLog');
@@ -481,7 +482,7 @@ app.post('/api/sonos/playlists/:id/add', asyncHandler(async (req, res) => {
 
 // Songs still being added to Sonos Playlists in the background.
 app.get('/api/sonos/playlist-jobs', (req, res) => {
-  res.json({ jobs: sonos.getPlaylistJobs(), plexCopyRunning: sonos.isPlexMirrorRunning() });
+  res.json({ jobs: sonos.getPlaylistJobs() });
 });
 
 app.delete('/api/sonos/playlists/:id/track/:index', asyncHandler(async (req, res) => {
@@ -489,11 +490,94 @@ app.delete('/api/sonos/playlists/:id/track/:index', asyncHandler(async (req, res
   res.json(result);
 }));
 
+// "Save queue as playlist" makes a Local Playlist from the room's queue.
 app.post('/api/sonos/room/:room/save-queue', asyncHandler(async (req, res) => {
   const title = (req.body.title || '').trim();
   if (!title) return res.status(400).json({ error: 'A playlist needs a name' });
-  const playlist = await sonos.saveQueueAsPlaylist(req.params.room, title);
-  res.json({ playlist });
+  const items = [];
+  for (let start = 0; ;) {
+    const q = await sonos.getQueue(req.params.room, start);
+    items.push(...(q.items || []).filter((t) => t.uri));
+    start += (q.items || []).length;
+    if (!q.items || q.items.length === 0 || start >= (q.total || 0)) break;
+  }
+  const playlist = localPlaylists.create(title);
+  const result = localPlaylists.addItems(playlist.id, items);
+  debugLog.info('playlists', `Saved the ${req.params.room} queue as Local Playlist "${title}" (${result.added} songs)`);
+  res.json({ playlist, ...result });
+}));
+
+// ---------------- Local Playlists ----------------
+// The panel's own playlists (localPlaylists.js). The Playlists screen
+// also lists Plex playlists and any Sonos playlists still on the
+// speakers, each in its own section.
+app.get('/api/playlists', asyncHandler(async (req, res) => {
+  const local = localPlaylists.list();
+  let plex = [];
+  try {
+    if (plexPlaylists.isEnabled()) plex = localBrowse.listPlexPlaylists(undefined, 0, 1000).items;
+  } catch (err) { /* no Plex tables yet */ }
+  let sonosLists = [];
+  if (req.query.room) {
+    try { sonosLists = await sonos.getPlaylists(req.query.room); } catch (err) { /* speakers busy -- skip */ }
+  }
+  res.json({ enabled: localPlaylists.isEnabled(), local, plex, sonos: sonosLists });
+}));
+
+app.post('/api/playlists', asyncHandler(async (req, res) => {
+  const title = (req.body.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'A playlist needs a name' });
+  res.json({ playlist: localPlaylists.create(title) });
+}));
+
+app.put('/api/playlists/:id', asyncHandler(async (req, res) => {
+  const title = String(req.body.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'A playlist needs a name' });
+  res.json({ playlist: localPlaylists.rename(req.params.id, title) });
+}));
+
+app.delete('/api/playlists/:id', asyncHandler(async (req, res) => {
+  res.json(localPlaylists.remove(req.params.id));
+}));
+
+// Add a song {uri, metadata} or a whole album/playlist {containerId}.
+app.post('/api/playlists/:id/add', asyncHandler(async (req, res) => {
+  const { uri, metadata, containerId, room, label } = req.body;
+  const title = localPlaylists.getTitle(req.params.id);
+  if (!title) return res.status(404).json({ error: 'That playlist no longer exists' });
+  let result;
+  if (containerId) {
+    const cid = String(containerId);
+    const sep = localBrowse.SEP;
+    if (cid.startsWith(`L:PLEXPLAYLIST${sep}`)) {
+      result = localPlaylists.addFromPlexPlaylist(req.params.id, cid.split(sep)[1]);
+    } else if (cid.startsWith(`L:LOCALPLAYLIST${sep}`)) {
+      result = localPlaylists.addFromLocalPlaylist(req.params.id, cid);
+    } else if (cid.startsWith('L:')) {
+      const flat = localBrowse.flattenContainerId(cid);
+      const items = [];
+      for (let start = 0; ;) {
+        const pg = await localBrowse.browsePage(flat, start, 200);
+        items.push(...pg.items.filter((t) => !t.browsable && t.uri));
+        start += pg.items.length;
+        if (pg.items.length === 0 || start >= (pg.total || 0)) break;
+      }
+      result = localPlaylists.addItems(req.params.id, items);
+    } else {
+      const { tracks } = await sonos.collectContainerTracks(room, cid, 20000);
+      result = localPlaylists.addItems(req.params.id, tracks);
+    }
+  } else if (uri) {
+    result = localPlaylists.addItems(req.params.id, [{ uri, metadata, title: label }]);
+  } else {
+    return res.status(400).json({ error: 'Provide either uri or containerId' });
+  }
+  debugLog.info('playlists', `Added ${result.added} song${result.added === 1 ? '' : 's'} to Local Playlist "${title}"${result.skipped ? ` (${result.skipped} skipped)` : ''}`);
+  res.json(result);
+}));
+
+app.delete('/api/playlists/:id/track/:index', asyncHandler(async (req, res) => {
+  res.json(localPlaylists.removeAt(req.params.id, req.params.index));
 }));
 
 app.get('/api/sonos/room/:room/music-library', asyncHandler(async (req, res) => {
@@ -688,57 +772,6 @@ app.post('/api/local/plex-sync', asyncHandler(async (req, res) => {
   const result = await plexPlaylists.sync('manual');
   res.status(result.ok ? 200 : 502).json(result);
 }));
-
-// Copy every Plex playlist into Sonos Playlists (same names). Once
-// started, the copies are kept topped up after each Plex sync. Runs in
-// the background; progress goes to the log.
-app.post('/api/local/plex-to-sonos', asyncHandler(async (req, res) => {
-  if (!plexPlaylists.isEnabled()) {
-    return res.status(503).json({ ok: false, error: 'Plex playlists are not enabled' });
-  }
-  if (sonos.isPlexMirrorRunning()) return res.json({ ok: true, running: true });
-  const state = readPlexCopyState();
-  state.enabled = true;
-  writePlexCopyState(state);
-  runPlexToSonosCopy('manual', true);
-  res.json({ ok: true, started: true });
-}));
-
-// ---- Plex -> Sonos playlist copies ----
-// State lives in the data folder: whether copying is on, and each Plex
-// playlist's song count when it was last copied (unchanged ones are
-// skipped, so the 15-minute syncs stay cheap).
-const PLEX_COPY_FILE = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'plex-sonos-copy.json');
-function readPlexCopyState() {
-  try { return JSON.parse(fs.readFileSync(PLEX_COPY_FILE, 'utf8')); } catch (err) { return { enabled: false, counts: {} }; }
-}
-function writePlexCopyState(state) {
-  try { fs.writeFileSync(PLEX_COPY_FILE, JSON.stringify(state)); } catch (err) { debugLog.warn('playlists', `Could not save ${PLEX_COPY_FILE}: ${err.message}`); }
-}
-function runPlexToSonosCopy(reason, force) {
-  if (sonos.isPlexMirrorRunning()) return;
-  const db = localScanner.getDatabase();
-  if (!db) return;
-  let rows;
-  try {
-    rows = db.prepare('SELECT id, title, matched_count FROM plex_playlists WHERE matched_count > 0 ORDER BY position').all();
-  } catch (err) {
-    return;
-  }
-  const state = readPlexCopyState();
-  state.counts = state.counts || {};
-  const todo = rows.filter((r) => force || state.counts[r.id] !== r.matched_count);
-  if (todo.length === 0) return;
-  const lists = todo.map((r) => ({ id: r.id, title: r.title, count: r.matched_count, containerId: `L:PLEXPLAYLIST${localBrowse.SEP}${r.id}` }));
-  sonos.copyPlexPlaylistsToSonos(lists, reason)
-    .then(() => {
-      const now = readPlexCopyState();
-      now.counts = now.counts || {};
-      for (const r of todo) now.counts[r.id] = r.matched_count;
-      writePlexCopyState(now);
-    })
-    .catch((err) => debugLog.error('playlists', `Plex -> Sonos copy failed: ${err.message}`));
-}
 
 // Category roots for the Local Music Library browse UI -- same shape
 // as the Sonos music-library categories endpoint the client already
@@ -978,8 +1011,9 @@ async function main() {
     }
   });
   plexPlaylists.init(scannerReady ? localScanner.getDatabase() : null);
-  plexPlaylists.onSynced(() => {
-    if (readPlexCopyState().enabled) runPlexToSonosCopy('after Plex sync', false);
+  localPlaylists.init(scannerReady ? localScanner.getDatabase() : null, {
+    trackItem: localBrowse.trackItem,
+    artUrl: localBrowse.artUrl
   });
 
   const server = app.listen(PORT, () => {

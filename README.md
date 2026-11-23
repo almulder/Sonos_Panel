@@ -50,8 +50,9 @@ not a panel limitation.
   clear, and save the queue as a playlist; live-updating via speaker
   events
 - Browse and play **Favorites** (grouped by service with proper
-  logos), **Sonos Playlists** (create, rename, delete, add/remove
-  tracks), and **Line-In** sources
+  logos), **Local Playlists** (the panel's own playlists, stored on the
+  panel with no song limit -- create, rename, delete, add/remove
+  songs), and **Line-In** sources
 - **Multi-account services**: households with several logins of one
   service (three Pandora accounts, say) get a user list per service
   ("Albert's Playlists", "Family's Playlists" -- names editable on
@@ -227,15 +228,22 @@ PoE panel whose CPU is ~13x slower than a laptop):
   normal. Needs ffmpeg, which the Docker image now includes (see
   [Converting files Sonos can't play](#converting-files-sonos-cant-play))
 
-### Updated: v0.22.0 - Nov 22, 2026
+### Updated: v0.23.0 - Nov 22, 2026
 
-- **Copy Plex playlists to Sonos Playlists**: Local Library -> Plex
-  Playlists has a **Copy all to Sonos Playlists** button. It makes a
-  Sonos Playlist with the same name for every Plex playlist (up to
-  5,000 songs each, so huge smart playlists like "All Music" are
-  skipped). After that, the copies are topped up with new songs after
-  each Plex sync. It runs in the background, and its progress shows in
-  the log
+- **Local Playlists**: the panel now has its own playlists, stored on
+  the panel (`playlists.db` in the data folder, kept apart from the
+  library index so a rescan or rebuilt index never touches them).
+  Sonos keeps its playlists on the speakers in a small store that
+  fills up at a few thousand songs; Local Playlists have no limit.
+  The **Local Playlists** source shows three sections: your Local
+  Playlists (with **+ New playlist**, and a pencil on each to rename
+  or delete), your **Plex Playlists**, and any Sonos playlists still on
+  the speakers. Every **+ / Add to playlist** button, **New playlist**
+  and **Save queue as playlist** now makes or fills a Local Playlist.
+  Songs in a Local Playlist have an **x** to take them out. Playlists
+  open with **Play** / **Shuffle** and **Load more**, and tapping a song
+  queues the whole playlist so next/previous work. Adding a Plex
+  playlist (even a 300,000-song one) copies it in one go
 
 ## Bug fixes
 
@@ -247,11 +255,6 @@ PoE panel whose CPU is ~13x slower than a laptop):
   5,000 songs) is queued around it. Playback starts right away and the
   rest is added in the background. **Play** and **Shuffle** on big lists
   queue everything too, instead of stopping at 500
-- **Adding a big playlist to a Sonos Playlist no longer stalls**: only
-  the first 200 songs were ever added, and the add re-read the whole
-  playlist before every song. It now adds every song, runs in the
-  background for anything over 50 songs, and logs its progress
-  (`[playlists] "name": 300 of 2161 processed`)
 - **Deleting a playlist works the first time**: the list was read back
   from a speaker that hadn't caught up with the delete yet, so the
   playlist reappeared until it was deleted again

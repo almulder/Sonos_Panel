@@ -1630,6 +1630,11 @@ async function getCachedContainerItems(roomName, containerId) {
 // Paged variant used by the browsing UI. Cache key includes the start
 // offset so page 2 of a big artist list doesn't overwrite page 1.
 async function getContainerPage(roomName, containerId, start = 0) {
+  // Local Playlists change with every edit and read straight from
+  // SQLite, so they're never cached.
+  if (String(containerId).startsWith('L:LOCALPLAYLIST')) {
+    return browseContainerPaged(roomName, containerId, start, 200);
+  }
   const key = `${containerId}|${start}`;
   const now = Date.now();
   const cached = containerItemsCache.get(key);
@@ -1904,68 +1909,6 @@ async function addContainerToPlaylist(roomName, playlistId, containerId, label) 
     debugLog.error('playlists', `Adding to "${label || playlistId}" failed: ${err.message}`);
   });
   return { background: true, total: tracks.length };
-}
-
-// ---------------------------------------------------------------------
-// Plex playlists -> Sonos Playlists. Creates a Sonos Playlist for every
-// Plex playlist (same name) and later tops each one up with songs that
-// were added to the Plex playlist since. Songs are only ever appended,
-// so anything removed in Plex stays on the Sonos copy.
-let plexMirrorRunning = false;
-async function copyPlexPlaylistsToSonos(plexLists, reason) {
-  if (usingMock) return { created: 0, updated: 0 };
-  if (plexMirrorRunning) return { running: true };
-  plexMirrorRunning = true;
-  const summary = { created: 0, updated: 0, unchanged: 0, skipped: [] };
-  try {
-    const device = anyDevice();
-    if (!device) throw new Error('No Sonos device available');
-    debugLog.info('playlists', `Copying ${plexLists.length} Plex playlist(s) to Sonos Playlists (${reason})...`);
-    const existing = [];
-    for (let start = 0; ;) {
-      const res = await browseContainerPaged(null, 'SQ:', start, 100);
-      existing.push(...res.items);
-      start += res.items.length;
-      if (res.items.length === 0 || start >= (res.total || 0)) break;
-    }
-    for (const pl of plexLists) {
-      if (pl.count > SONOS_PLAYLIST_MAX_TRACKS) {
-        summary.skipped.push(pl.title);
-        debugLog.info('playlists', `Skipping Plex playlist "${pl.title}" -- ${pl.count} songs is over the ${SONOS_PLAYLIST_MAX_TRACKS}-song limit`);
-        continue;
-      }
-      let target = existing.find((p) => String(p.id).startsWith('SQ:') && p.title === pl.title);
-      let have = new Set();
-      if (target) {
-        const { tracks } = await collectContainerTracks(null, target.id, SONOS_PLAYLIST_MAX_TRACKS * 2);
-        have = new Set(tracks.map((t) => t.uri));
-      } else {
-        const created = await device.createPlaylist(pl.title);
-        if (!created.AssignedObjectID) {
-          debugLog.error('playlists', `Sonos would not create a playlist named "${pl.title}"`);
-          continue;
-        }
-        target = { id: created.AssignedObjectID, title: pl.title };
-        summary.created += 1;
-        debugLog.info('playlists', `Created Sonos playlist "${pl.title}" (${target.id})`);
-      }
-      const { tracks } = await collectContainerTracks(null, pl.containerId);
-      const missing = tracks.filter((t) => !have.has(t.uri));
-      if (missing.length === 0) { summary.unchanged += 1; continue; }
-      if (have.size > 0) summary.updated += 1;
-      await appendTracksToSonosPlaylist(target.id, missing, pl.title);
-    }
-    debugLog.info('playlists', `Plex -> Sonos copy finished: ${summary.created} created, ${summary.updated} topped up, ${summary.unchanged} already up to date${summary.skipped.length ? `, skipped (too big): ${summary.skipped.join(', ')}` : ''}`);
-    return summary;
-  } finally {
-    plexMirrorRunning = false;
-    invalidateContainerCache('SQ:');
-    invalidatePlaylistsCache();
-  }
-}
-
-function isPlexMirrorRunning() {
-  return plexMirrorRunning;
 }
 
 async function removeTrackFromPlaylist(playlistId, index) {
@@ -4219,14 +4162,19 @@ async function getSourceGroups(roomName) {
   // very front rather than sorted in alphabetically -- per request.
   // Goes through the same cache getPlaylists() uses, so this doesn't
   // duplicate the fetch.
+  // Local Playlists (the panel's own, plus Plex's and any Sonos
+  // playlists in their own sections) whenever the Local Music Library
+  // is set up; otherwise only if Sonos playlists exist.
   let playlistCount = 0;
-  try {
-    playlistCount = (await getPlaylists(roomName)).length;
-  } catch (err) {
-    debugLog.warn('sonos', `getSourceGroups: could not check for playlists: ${err.message}`);
+  if (!localBrowse.available()) {
+    try {
+      playlistCount = (await getPlaylists(roomName)).length;
+    } catch (err) {
+      debugLog.warn('sonos', `getSourceGroups: could not check for playlists: ${err.message}`);
+    }
   }
-  if (playlistCount > 0) {
-    groups.unshift({ id: 'SQ:', title: 'Playlists', browsable: true, isPlaylistRoot: true });
+  if (localBrowse.available() || playlistCount > 0) {
+    groups.unshift({ id: 'L:LOCALPLAYLISTS', title: 'Local Playlists', browsable: true, isPlaylistRoot: true });
   }
 
   // Music Library pinned to the very top -- it's the only source here
@@ -4403,8 +4351,7 @@ module.exports = {
   addUriToPlaylist,
   addContainerToPlaylist,
   getPlaylistJobs,
-  copyPlexPlaylistsToSonos,
-  isPlexMirrorRunning,
+  collectContainerTracks,
   removeTrackFromPlaylist,
   saveQueueAsPlaylist,
   setGroupMembers,
