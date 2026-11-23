@@ -284,10 +284,22 @@ function matchTrack(t) {
 // result. Writes happen in one transaction at the end, so a failed sync
 // leaves the previous playlists in place rather than half of them.
 // ---------------------------------------------------------------------
+// Called after every successful sync (startup, interval, manual).
+const syncListeners = [];
+function onSynced(fn) {
+  syncListeners.push(fn);
+}
+
 function sync(reason) {
   if (!isEnabled()) return Promise.resolve({ ok: false, error: 'Plex playlists are not enabled' });
   if (syncInFlight) return syncInFlight;
   syncInFlight = runSync(reason || 'manual')
+    .then((result) => {
+      for (const fn of syncListeners) {
+        try { fn(result); } catch (err) { debugLog.warn('plex', `After-sync hook failed: ${err.message}`); }
+      }
+      return result;
+    })
     .catch((err) => {
       state.lastError = err.message;
       debugLog.warn('plex', `Plex playlist sync failed (${reason}): ${err.message}`);
@@ -369,6 +381,7 @@ function getStatus() {
 module.exports = {
   init,
   sync,
+  onSynced,
   isEnabled,
   getStatus,
   // exported for direct testing

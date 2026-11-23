@@ -1687,7 +1687,12 @@ function invalidateContainerCache(prefix) {
 // from the container cache -- clearing only the latter left a newly
 // created playlist invisible until that timer expired or the page was
 // reloaded. Any write has to drop both.
+// The generation bump matters: a refresh already in flight when a
+// playlist is deleted would otherwise land afterwards and put the
+// deleted playlist back -- why a delete sometimes had to be done twice.
+let playlistsCacheGen = 0;
 function invalidatePlaylistsCache() {
+  playlistsCacheGen += 1;
   playlistsCache = { items: null, at: 0, refreshing: false };
 }
 
@@ -1787,26 +1792,180 @@ async function renameSonosPlaylist(playlistId, currentTitle, newTitle) {
   return { ok: true };
 }
 
-async function addContainerToPlaylist(roomName, playlistId, containerId) {
+// Every track of a container, paging past the 200-per-browse limit
+// (the old single page was why a 2,000-song Plex playlist only ever
+// got its first 200 songs). `cap` stops runaway smart playlists.
+async function collectContainerTracks(roomName, containerId, cap = SONOS_PLAYLIST_MAX_TRACKS) {
   if (localBrowse.flattenContainerId) containerId = localBrowse.flattenContainerId(containerId);
-  if (usingMock) return { added: 0, failed: 0 };
-  const { items } = await browseContainerPaged(roomName, containerId, 0, 200);
-  const tracks = items.filter((i) => !i.browsable && i.uri);
-  let added = 0;
-  const failed = [];
-  for (const track of tracks) {
+  const tracks = [];
+  let total = 0;
+  // Advance by what actually came back: speakers cap a Browse at ~100
+  // items whatever is asked for, so stepping by 200 would skip songs.
+  for (let start = 0; ;) {
+    const res = await browseContainerPaged(roomName, containerId, start, 200);
+    total = res.total || 0;
+    for (const it of res.items) {
+      if (!it.browsable && it.uri) tracks.push(it);
+    }
+    start += res.items.length;
+    if (res.items.length === 0 || start >= total || tracks.length >= cap) break;
+  }
+  return { tracks: tracks.slice(0, cap), total };
+}
+
+// Sonos Playlists past this size are refused or become unusably slow on
+// the speakers, so bigger sources (e.g. Plex's "All Music") are skipped.
+const SONOS_PLAYLIST_MAX_TRACKS = 5000;
+
+// Background playlist writes, one per playlist at a time. Surfaced at
+// GET /api/sonos/playlist-jobs and as progress lines in the log.
+const playlistJobs = new Map(); // playlistId -> { title, total, added, failed, state, startedAt }
+
+function getPlaylistJobs() {
+  return [...playlistJobs.entries()].map(([id, j]) => ({ id, ...j }));
+}
+
+// Appends tracks to a Sonos Playlist in order. Each AddURIToSavedQueue
+// answers with the playlist's NEW UpdateID, which the next call needs --
+// chaining that instead of re-reading the whole playlist before every
+// track (the old way: one full playlist browse per song) is what makes
+// a 2,000-song add take a minute or two instead of stalling.
+async function appendTracksToSonosPlaylist(playlistId, tracks, label) {
+  const device = anyDevice();
+  if (!device) throw new Error('No Sonos device available');
+  const bare = barePlaylistId(playlistId);
+  const job = { title: label || playlistId, total: tracks.length, added: 0, failed: 0, state: 'running', startedAt: new Date().toISOString() };
+  playlistJobs.set(playlistId, job);
+  const t0 = Date.now();
+  debugLog.info('playlists', `Adding ${tracks.length} song(s) to Sonos playlist "${job.title}"...`);
+  let updateId = (await device.getPlaylist(bare, { start: 0, total: 1 })).updateID;
+  let consecutiveFails = 0;
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    if (skipIfIncompatible(`playlist "${job.title}"`, t)) { job.failed += 1; continue; }
     try {
-      // Pass each track's own DIDL through when the browse layer
-      // supplied one (Local Library items always do), so whole-album
-      // adds store full metadata too.
-      await addUriToPlaylist(playlistId, track.uri, track.metadata);
-      added += 1;
+      const raw = await withTimeout(device.avTransportService().AddURIToSavedQueue({
+        InstanceID: 0,
+        ObjectID: `SQ:${bare}`,
+        UpdateID: updateId,
+        EnqueuedURI: Helpers.EncodeXml(t.uri),
+        EnqueuedURIMetaData: Helpers.EncodeXml(t.metadata || ''),
+        AddAtIndex: 4294967295
+      }), 15000, 'AddURIToSavedQueue');
+      if (raw.NewUpdateID !== undefined) updateId = raw.NewUpdateID;
+      if ((parseInt(raw.NumTracksAdded, 10) || 0) < 1) throw new Error('Sonos added no track');
+      job.added += 1;
+      consecutiveFails = 0;
     } catch (err) {
-      failed.push(track.title);
-      debugLog.warn('sonos', `addContainerToPlaylist: "${track.title}" failed -- ${err.message}`);
+      job.failed += 1;
+      consecutiveFails += 1;
+      debugLog.warn('playlists', `"${job.title}": Sonos refused "${t.title || t.uri}" -- ${err.message}`);
+      // A stale UpdateID makes every following call fail; re-read it once.
+      try { updateId = (await device.getPlaylist(bare, { start: 0, total: 1 })).updateID; } catch (e) { /* keep going */ }
+      if (consecutiveFails >= 10) {
+        job.state = 'stopped';
+        debugLog.error('playlists', `"${job.title}": stopped after 10 failures in a row (${job.added} of ${job.total} added)`);
+        break;
+      }
+    }
+    if ((i + 1) % 100 === 0) {
+      debugLog.info('playlists', `"${job.title}": ${i + 1} of ${tracks.length} processed (${job.added} added, ${job.failed} skipped)`);
+      // Let open Playlists screens show the growing count now and then.
+      invalidateContainerCache(`SQ:${bare}`);
     }
   }
-  return { added, failed };
+  if (job.state === 'running') job.state = 'done';
+  job.finishedAt = new Date().toISOString();
+  invalidateContainerCache(`SQ:${bare}`);
+  invalidateContainerCache('SQ:');
+  invalidatePlaylistsCache();
+  debugLog.info('playlists', `"${job.title}": finished -- ${job.added} added, ${job.failed} skipped, in ${Math.round((Date.now() - t0) / 1000)}s`);
+  setTimeout(() => { if (playlistJobs.get(playlistId) === job) playlistJobs.delete(playlistId); }, 10 * 60 * 1000);
+  return { added: job.added, failed: job.failed };
+}
+
+// Adds a whole album/playlist. Small ones finish before the response;
+// anything bigger runs in the background (the browser request would
+// otherwise time out mid-way, which looked like the add "got stuck").
+async function addContainerToPlaylist(roomName, playlistId, containerId, label) {
+  if (usingMock) return { added: 0, failed: [] };
+  if (playlistJobs.get(playlistId) && playlistJobs.get(playlistId).state === 'running') {
+    throw new Error('Songs are still being added to that playlist -- wait for it to finish');
+  }
+  const { tracks, total } = await collectContainerTracks(roomName, containerId);
+  if (total > SONOS_PLAYLIST_MAX_TRACKS) {
+    debugLog.warn('playlists', `"${label || containerId}" has ${total} songs; only the first ${SONOS_PLAYLIST_MAX_TRACKS} are added`);
+  }
+  if (tracks.length <= 50) {
+    const r = await appendTracksToSonosPlaylist(playlistId, tracks, label);
+    return { added: r.added, failed: new Array(r.failed).fill('') };
+  }
+  appendTracksToSonosPlaylist(playlistId, tracks, label).catch((err) => {
+    debugLog.error('playlists', `Adding to "${label || playlistId}" failed: ${err.message}`);
+  });
+  return { background: true, total: tracks.length };
+}
+
+// ---------------------------------------------------------------------
+// Plex playlists -> Sonos Playlists. Creates a Sonos Playlist for every
+// Plex playlist (same name) and later tops each one up with songs that
+// were added to the Plex playlist since. Songs are only ever appended,
+// so anything removed in Plex stays on the Sonos copy.
+let plexMirrorRunning = false;
+async function copyPlexPlaylistsToSonos(plexLists, reason) {
+  if (usingMock) return { created: 0, updated: 0 };
+  if (plexMirrorRunning) return { running: true };
+  plexMirrorRunning = true;
+  const summary = { created: 0, updated: 0, unchanged: 0, skipped: [] };
+  try {
+    const device = anyDevice();
+    if (!device) throw new Error('No Sonos device available');
+    debugLog.info('playlists', `Copying ${plexLists.length} Plex playlist(s) to Sonos Playlists (${reason})...`);
+    const existing = [];
+    for (let start = 0; ;) {
+      const res = await browseContainerPaged(null, 'SQ:', start, 100);
+      existing.push(...res.items);
+      start += res.items.length;
+      if (res.items.length === 0 || start >= (res.total || 0)) break;
+    }
+    for (const pl of plexLists) {
+      if (pl.count > SONOS_PLAYLIST_MAX_TRACKS) {
+        summary.skipped.push(pl.title);
+        debugLog.info('playlists', `Skipping Plex playlist "${pl.title}" -- ${pl.count} songs is over the ${SONOS_PLAYLIST_MAX_TRACKS}-song limit`);
+        continue;
+      }
+      let target = existing.find((p) => String(p.id).startsWith('SQ:') && p.title === pl.title);
+      let have = new Set();
+      if (target) {
+        const { tracks } = await collectContainerTracks(null, target.id, SONOS_PLAYLIST_MAX_TRACKS * 2);
+        have = new Set(tracks.map((t) => t.uri));
+      } else {
+        const created = await device.createPlaylist(pl.title);
+        if (!created.AssignedObjectID) {
+          debugLog.error('playlists', `Sonos would not create a playlist named "${pl.title}"`);
+          continue;
+        }
+        target = { id: created.AssignedObjectID, title: pl.title };
+        summary.created += 1;
+        debugLog.info('playlists', `Created Sonos playlist "${pl.title}" (${target.id})`);
+      }
+      const { tracks } = await collectContainerTracks(null, pl.containerId);
+      const missing = tracks.filter((t) => !have.has(t.uri));
+      if (missing.length === 0) { summary.unchanged += 1; continue; }
+      if (have.size > 0) summary.updated += 1;
+      await appendTracksToSonosPlaylist(target.id, missing, pl.title);
+    }
+    debugLog.info('playlists', `Plex -> Sonos copy finished: ${summary.created} created, ${summary.updated} topped up, ${summary.unchanged} already up to date${summary.skipped.length ? `, skipped (too big): ${summary.skipped.join(', ')}` : ''}`);
+    return summary;
+  } finally {
+    plexMirrorRunning = false;
+    invalidateContainerCache('SQ:');
+    invalidatePlaylistsCache();
+  }
+}
+
+function isPlexMirrorRunning() {
+  return plexMirrorRunning;
 }
 
 async function removeTrackFromPlaylist(playlistId, index) {
@@ -3046,7 +3205,13 @@ async function browseContainerPaged(roomName, containerId, start = 0, count = 20
     const items = mockState.browse[containerId] || [];
     return { items, total: items.length };
   }
-  const device = findDevice(roomName) || devicesByName.values().next().value;
+  // Sonos Playlists are written through anyDevice() (create, add,
+  // delete), and speakers take a while to share those changes with each
+  // other -- reading them back from a different speaker could still show
+  // a deleted playlist (why deleting sometimes took two tries) or an
+  // empty new one. Read them from the same speaker they're written to.
+  const device = (typeof containerId === 'string' && containerId.startsWith('SQ:') && anyDevice())
+    || findDevice(roomName) || devicesByName.values().next().value;
   if (!device) return { items: [], total: 0 };
 
   return guarded(`browseContainer(${containerId})`, async () => {
@@ -3279,6 +3444,7 @@ async function playItemNow(roomName, uri, metadata) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
+  cancelQueueFill(roomName);
   roomPlaylistContext.delete(roomName);
   roomLocalQueueContext.delete(roomName);
   roomFavoriteContext.set(coordinatorNameFor(roomName), { uri, sid: (String(uri || '').match(/[?&]sid=(\d+)/) || [])[1] || null, at: Date.now() });
@@ -3382,34 +3548,92 @@ function buildTrackMetadata(track) {
   );
 }
 
-async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, trackUri) {
+// Background queue fills, one per room. Anything else that rebuilds a
+// room's queue cancels the fill first, so a half-finished playlist can't
+// keep pouring songs into whatever was started next.
+const queueFillTokens = new Map(); // coordinator room -> token object
+function cancelQueueFill(roomName) {
+  const key = coordinatorNameFor(roomName);
+  const had = queueFillTokens.get(key);
+  if (had) had.cancelled = true;
+  queueFillTokens.delete(key);
+}
+
+// Most songs a tap queues around the chosen track. Sonos queues top out
+// at 40,000, and a smart "All Music" playlist would take far too long.
+const QUEUE_WINDOW = 5000;
+const QUEUE_FIRST_CHUNK = 15;
+
+async function fetchContainerRange(roomName, containerId, start, count) {
+  const out = [];
+  let total = 0;
+  for (let at = start; out.length < count;) {
+    const res = await browseContainerPaged(roomName, containerId, at, Math.min(200, count - out.length));
+    total = res.total || 0;
+    if (res.items.length === 0) break;
+    out.push(...res.items.filter((t) => !t.browsable && t.uri));
+    at += res.items.length;
+    if (at >= total) break;
+  }
+  return { tracks: out, total };
+}
+
+// Plays `trackUri` from a playlist/album with the WHOLE container queued
+// around it, so next/previous work. Big containers used to fall back to
+// playing the one song alone (nothing to skip to). Now: queue the tapped
+// song plus a few after it, start playing, then fill in the rest -- the
+// songs after it, then the ones before -- in the background.
+// `index` is the song's position in the container (from the browse
+// page); without it only the first page is searched, as before.
+async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, trackUri, index) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) return;
+  cancelQueueFill(roomName);
   roomLocalQueueContext.delete(roomName);
   roomFavoriteContext.delete(coordinatorNameFor(roomName));
+  const label = playlistTitle || playlistContainerId;
+  const token = { cancelled: false };
+  queueFillTokens.set(coordinatorNameFor(roomName), token);
+
+  let after = [];
+  let before = [];
   await guarded(`playPlaylistTrack(${roomName})`, async () => {
-    const tracks = await browseContainer(roomName, playlistContainerId);
-    const playableTracks = tracks.filter((t) => t.uri && !skipIfIncompatible(`playPlaylistTrack(${roomName})`, t));
-    const targetIndex = playableTracks.findIndex((t) => t.uri === trackUri);
+    let at = Number.isInteger(index) && index >= 0 ? index : -1;
+    let probe = at >= 0 ? await fetchContainerRange(roomName, playlistContainerId, at, 1) : null;
+    if (!probe || !probe.tracks[0] || (trackUri && probe.tracks[0].uri !== trackUri)) {
+      // No index, or the list moved since it was shown: find the song in
+      // the first page (the old behaviour) or start from the top.
+      const first = await fetchContainerRange(roomName, playlistContainerId, 0, 200);
+      at = Math.max(0, first.tracks.findIndex((t) => t.uri === trackUri));
+      probe = first;
+    }
+    const total = probe.total || 0;
+    const fromHere = await fetchContainerRange(roomName, playlistContainerId, at, Math.min(QUEUE_WINDOW, Math.max(1, total - at)));
+    after = fromHere.tracks.filter((t) => !skipIfIncompatible(`playPlaylistTrack(${roomName})`, t));
+    if (after.length === 0) throw new Error(`nothing playable in "${label}"`);
+    const startUri = after[0].uri;
+    const spare = QUEUE_WINDOW - after.length;
+    if (at > 0 && spare > 0) {
+      const startBefore = Math.max(0, at - spare);
+      before = (await fetchContainerRange(roomName, playlistContainerId, startBefore, at - startBefore)).tracks
+        .filter((t) => !skipIfIncompatible(`playPlaylistTrack(${roomName})`, t));
+    }
 
     await device.flush();
-    const queuedUris = [];
-    for (const track of playableTracks) {
+    const head = after.slice(0, QUEUE_FIRST_CHUNK);
+    let queued = 0;
+    for (const track of head) {
       try {
         await appendToQueue(device, track.uri, track.metadata || buildTrackMetadata(track));
-        queuedUris.push(track.uri);
+        queued += 1;
       } catch (err) {
         debugLog.warn('sonos', `playPlaylistTrack(${roomName}): Sonos refused "${track.title}" (${track.uri}) -- skipping it: ${err.message}`);
       }
     }
-    if (queuedUris.length === 0) throw new Error(`none of the ${playableTracks.length} track(s) in "${playlistTitle || playlistContainerId}" could be queued`);
-    if (queuedUris.length < playableTracks.length) {
-      debugLog.warn('sonos', `playPlaylistTrack(${roomName}): queued ${queuedUris.length} of ${playableTracks.length} track(s); the rest were refused`);
-    }
+    if (queued === 0) throw new Error(`none of the first ${head.length} track(s) in "${label}" could be queued`);
     await selectQueue(device);
-    const queuedTarget = queuedUris.indexOf(trackUri);
-    await device.selectTrack(await queuePositionForPlay(device, roomName, trackUri, queuedTarget >= 0 ? queuedTarget + 1 : 1));
+    await device.selectTrack(await queuePositionForPlay(device, roomName, startUri, 1));
     await device.play();
     roomPlaylistContext.set(roomName, {
       id: playlistContainerId,
@@ -3417,6 +3641,55 @@ async function playPlaylistTrack(roomName, playlistContainerId, playlistTitle, t
       local: String(playlistContainerId).startsWith('L:')
     });
   });
+
+  const rest = after.slice(QUEUE_FIRST_CHUNK);
+  if (rest.length === 0 && before.length === 0) {
+    if (queueFillTokens.get(coordinatorNameFor(roomName)) === token) queueFillTokens.delete(coordinatorNameFor(roomName));
+    return;
+  }
+  debugLog.info('sonos', `Queue for ${roomName}: playing "${label}" -- adding ${rest.length + before.length} more song(s) in the background`);
+  fillQueueInBackground(device, roomName, label, rest, before, token).catch((err) => {
+    debugLog.warn('sonos', `Queue fill for ${roomName} ("${label}") stopped: ${err.message}`);
+  });
+}
+
+async function fillQueueInBackground(device, roomName, label, rest, before, token) {
+  const t0 = Date.now();
+  const total = rest.length + before.length;
+  let added = 0;
+  let refused = 0;
+  const step = async (track, position) => {
+    if (token.cancelled) return false;
+    try {
+      transcoder.prewarm(track.uri);
+      await device.avTransportService().AddURIToQueue({
+        InstanceID: 0,
+        EnqueuedURI: Helpers.EncodeXml(track.uri),
+        EnqueuedURIMetaData: Helpers.EncodeXml(track.metadata || buildTrackMetadata(track)),
+        DesiredFirstTrackNumberEnqueued: position,
+        EnqueueAsNext: 0
+      });
+      added += 1;
+    } catch (err) {
+      refused += 1;
+      if (refused <= 5) debugLog.warn('sonos', `Queue fill for ${roomName}: Sonos refused "${track.title || track.uri}" -- ${err.message}`);
+      if (refused >= 25 && added === 0) throw new Error('Sonos is refusing every song');
+    }
+    if ((added + refused) % 250 === 0) {
+      debugLog.info('sonos', `Queue fill for ${roomName} ("${label}"): ${added + refused} of ${total}`);
+    }
+    return true;
+  };
+  for (const track of rest) {
+    if (!(await step(track, 0))) break;
+  }
+  // The songs before the tapped one go in front of it, in order.
+  for (let i = 0; i < before.length; i++) {
+    if (!(await step(before[i], i + 1))) break;
+  }
+  invalidateContainerCache('Q:0');
+  if (queueFillTokens.get(coordinatorNameFor(roomName)) === token) queueFillTokens.delete(coordinatorNameFor(roomName));
+  debugLog.info('sonos', `Queue fill for ${roomName} ("${label}") ${token.cancelled ? 'cancelled (something else was played)' : 'done'}: ${added} added${refused ? `, ${refused} refused` : ''} in ${Math.round((Date.now() - t0) / 1000)}s`);
 }
 
 // Like buildTrackMetadata above, but for tracks streamed from the
@@ -3686,6 +3959,7 @@ async function clearQueue(roomName) {
   if (usingMock) return;
   const device = findDevice(coordinatorNameFor(roomName));
   if (!device) throw new Error(`Room not found: ${roomName}`);
+  cancelQueueFill(roomName);
   await guarded(`clearQueue(${roomName})`, async () => {
     await device.flush();
     invalidateContainerCache('Q:0');
@@ -3714,6 +3988,7 @@ async function playTracksAsQueue(roomName, tracks) {
   if (usingMock) return;
   const device = findDevice(roomName);
   if (!device) throw new Error(`Room not found: ${roomName}`);
+  cancelQueueFill(roomName);
   roomPlaylistContext.delete(roomName);
   roomFavoriteContext.delete(coordinatorNameFor(roomName));
   await guarded(`playTracksAsQueue(${roomName})`, async () => {
@@ -3791,6 +4066,7 @@ async function playLineInFrom(targetRoomName, sourceRoomName) {
   if (usingMock) return;
   const targetDevice = findDevice(targetRoomName);
   if (!targetDevice) return;
+  cancelQueueFill(targetRoomName);
   roomPlaylistContext.delete(targetRoomName);
   roomLocalQueueContext.delete(targetRoomName);
   await guarded(`playLineInFrom(${targetRoomName} <- ${sourceRoomName})`, async () => {
@@ -3999,11 +4275,14 @@ async function fetchPlaylistsFresh(roomName) {
 }
 
 async function refreshPlaylistsCache(roomName) {
-  if (playlistsCache.refreshing) return playlistsCache.items || [];
+  if (playlistsCache.refreshing && playlistsCache.items) return playlistsCache.items;
   playlistsCache.refreshing = true;
+  const gen = playlistsCacheGen;
   try {
     const items = await fetchPlaylistsFresh(roomName);
-    playlistsCache = { items, at: Date.now(), refreshing: false };
+    // Invalidated while this was running: the answer may predate the
+    // change, so hand it back but don't keep it.
+    if (gen === playlistsCacheGen) playlistsCache = { items, at: Date.now(), refreshing: false };
     return items;
   } catch (err) {
     playlistsCache.refreshing = false;
@@ -4123,6 +4402,9 @@ module.exports = {
   deleteSonosPlaylist,
   addUriToPlaylist,
   addContainerToPlaylist,
+  getPlaylistJobs,
+  copyPlexPlaylistsToSonos,
+  isPlexMirrorRunning,
   removeTrackFromPlaylist,
   saveQueueAsPlaylist,
   setGroupMembers,

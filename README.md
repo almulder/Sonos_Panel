@@ -227,7 +227,34 @@ PoE panel whose CPU is ~13x slower than a laptop):
   normal. Needs ffmpeg, which the Docker image now includes (see
   [Converting files Sonos can't play](#converting-files-sonos-cant-play))
 
+### Updated: v0.22.0 - Nov 22, 2026
+
+- **Copy Plex playlists to Sonos Playlists**: Local Library -> Plex
+  Playlists has a **Copy all to Sonos Playlists** button. It makes a
+  Sonos Playlist with the same name for every Plex playlist (up to
+  5,000 songs each, so huge smart playlists like "All Music" are
+  skipped). After that, the copies are topped up with new songs after
+  each Plex sync. It runs in the background, and its progress shows in
+  the log
+
 ## Bug fixes
+
+### Updated: v0.22.0 - Nov 22, 2026
+
+- **Skipping works in big playlists**: tapping a song in a playlist,
+  album, artist or genre with more than 200 songs used to play that one
+  song alone, so there was nothing to skip to. Now the whole list (up to
+  5,000 songs) is queued around it. Playback starts right away and the
+  rest is added in the background. **Play** and **Shuffle** on big lists
+  queue everything too, instead of stopping at 500
+- **Adding a big playlist to a Sonos Playlist no longer stalls**: only
+  the first 200 songs were ever added, and the add re-read the whole
+  playlist before every song. It now adds every song, runs in the
+  background for anything over 50 songs, and logs its progress
+  (`[playlists] "name": 300 of 2161 processed`)
+- **Deleting a playlist works the first time**: the list was read back
+  from a speaker that hadn't caught up with the delete yet, so the
+  playlist reappeared until it was deleted again
 
 ### Updated: v0.21.1 - Nov 18, 2026
 

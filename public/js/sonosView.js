@@ -2091,10 +2091,17 @@ const SonosView = (() => {
       const result = await api(`/api/sonos/playlists/${encodeURIComponent(playlistId)}/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, room: focusedRoom })
+        body: JSON.stringify({ ...payload, label, room: focusedRoom })
       });
       if (result && result.error) {
         status.textContent = `Couldn't add: ${result.error}`;
+        return;
+      }
+      if (result && result.background) {
+        // Big lists are added by the panel in the background; progress
+        // shows in the log and the playlist fills up as it goes.
+        status.textContent = `Adding ${result.total} songs in the background — this can take a few minutes.`;
+        setTimeout(() => { overlay.style.display = 'none'; }, 2500);
         return;
       }
       // A container add reports per-track results, since some tracks
@@ -2348,23 +2355,64 @@ const SonosView = (() => {
     const shuffleBtn2 = make('\u{1F500}  Shuffle', false);
     const fire = async (withShuffle) => {
       playBtn.disabled = true; shuffleBtn2.disabled = true;
-      await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/queue/add`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ containerId: state.containerId, mode: 'now' })
-      });
-      if (withShuffle) {
-        await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/shuffle`, {
+      const first = state.items.find((it) => !it.browsable && it.uri);
+      if (first && state.items[0] === first) {
+        // A list of songs (playlist, album): replace the queue with the
+        // whole list -- big ones start at once and fill in behind.
+        if (withShuffle) {
+          await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/shuffle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ on: true })
+          });
+        }
+        await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/play-playlist-track`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ on: true })
+          body: JSON.stringify({ playlistId: state.containerId, playlistTitle: state.title, uri: first.uri, index: 0 })
         });
+      } else {
+        await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/queue/add`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ containerId: state.containerId, mode: 'now' })
+        });
+        if (withShuffle) {
+          await api(`/api/sonos/room/${encodeURIComponent(focusedRoom)}/shuffle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ on: true })
+          });
+        }
       }
       playBtn.disabled = false; shuffleBtn2.disabled = false;
       await refreshNowPlaying();
     };
     playBtn.addEventListener('click', () => fire(false));
     shuffleBtn2.addEventListener('click', () => fire(true));
+    return li;
+  }
+
+  // Plex Playlists root: one button that copies every Plex playlist into
+  // Sonos Playlists (and keeps them topped up after each Plex sync).
+  function buildPlexCopyRow() {
+    const li = document.createElement('li');
+    li.className = 'sourcepanel__actions';
+    const btn = document.createElement('button');
+    btn.className = 'sourcepanel__actionbtn';
+    btn.textContent = 'Copy all to Sonos Playlists';
+    const note = document.createElement('span');
+    note.className = 'sourcepanel__servicelabel';
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      btn.disabled = true;
+      const r = await api('/api/local/plex-to-sonos', { method: 'POST' });
+      note.textContent = r && r.ok
+        ? (r.running ? ' Already copying — see the log for progress.' : ' Copying in the background — kept up to date after each Plex sync.')
+        : ` Couldn't start: ${(r && r.error) || 'unknown error'}`;
+    });
+    li.appendChild(btn);
+    li.appendChild(note);
     return li;
   }
 
@@ -2376,12 +2424,15 @@ const SonosView = (() => {
     if (isPlayableContainer(state.containerId) && (state.containerId !== state.categoryId || state.containerId === 'L:RECENT')) {
       sourcePanelItems.appendChild(buildContainerActionsRow(state));
     }
+    if (state.containerId === 'L:PLEXPLAYLISTS') {
+      sourcePanelItems.appendChild(buildPlexCopyRow());
+    }
     if (state.items.length === 0) {
       sourcePanelItems.innerHTML = '<li class="sourcepanel__loading">Nothing here.</li>';
       return;
     }
 
-    state.items.forEach((item) => {
+    state.items.forEach((item, itemIndex) => {
       const li = document.createElement('li');
       li.className = 'sourcepanel__item';
 
@@ -2444,9 +2495,12 @@ const SonosView = (() => {
           // (potentially tens of thousands of tracks) would be absurd,
           // so anything larger than one page falls back to playing the
           // single track.
-          const queueWholeContainer = state.total > 0 && state.total <= 200;
+          // Playlists, albums, artists and genres queue the whole list
+          // (big ones start right away and fill in behind -- see
+          // playPlaylistTrack server-side), so next/previous work.
+          const queueWholeContainer = (state.total > 0 && state.total <= 200) || isPlayableContainer(state.containerId);
           if (queueWholeContainer) {
-            if (!(await postPlay('play-playlist-track', { playlistId: state.containerId, playlistTitle: state.title, uri: item.uri }, item.title))) return;
+            if (!(await postPlay('play-playlist-track', { playlistId: state.containerId, playlistTitle: state.title, uri: item.uri, index: itemIndex }, item.title))) return;
           } else {
             if (!(await postPlay('play-item', { uri: item.uri, metadata: item.metadata, serviceLabel: item.serviceLabel || item.groupTitle || null }, item.title))) return;
           }
